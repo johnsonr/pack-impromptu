@@ -51,6 +51,9 @@
       {% for c in constraints %}- {{ c }}
       {% endfor %}
       {% endif %}
+      {% if hint %}
+      Steer your choices strongly toward this special request from the listener: {{ hint }}
+      {% endif %}
       Rules:
       - Suggest up to {{ want }} works in total across all the numbered works.
       - Set `sourceIndex` to the number of the work each suggestion is similar to.
@@ -209,6 +212,9 @@
       Only suggest works that satisfy ALL of these constraints (skip any that don't):
       {% for c in constraints %}- {{ c }}
       {% endfor %}
+      {% endif %}
+      {% if hint %}
+      Steer your choices strongly toward this special request from the listener: {{ hint }}
       {% endif %}
       Rules:
       - Suggest up to {{ want }} works in total.
