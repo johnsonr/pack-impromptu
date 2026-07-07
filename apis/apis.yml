@@ -1,0 +1,26 @@
+# Work metadata.
+#
+# Open Opus (`openopus`): free, NO auth. One operation — `omnisearch` — resolves a
+# free-text "composer + work" string into a stable work id + title + composer + genre,
+# so a MusicalWork canonicalizes onto the Open Opus spine (the classical-music analogue
+# of OMDb's IMDb id). Vendored as a narrow spec (just the one op the skill/producers use),
+# the same approach pack-movie takes for OMDb.
+#
+# YOUTUBE is NOT declared here. Recordings come from the YouTube Data API v3 `search`
+# slice, which lives in the RESEARCH pack (`gateway.youtube.searchYouTubeVideos`) as a
+# general, reusable capability — a vendored OpenAPI spec, NOT MCP. This pack REQUIRES
+# pack-research to be installed for recordings (the `recordingsByWork` producer and the
+# `music` skill call that gateway op); without it, recording lookups degrade gracefully
+# to "the integration may not be connected". Set YOUTUBE_API_KEY on the assistant process.
+#
+# IMSLP (public-domain scores) is NOT an API: its lookup is a multi-step MediaWiki crawl
+# (search page → list files → resolve PDF urls) that doesn't map to a single remote op, so
+# the pack sources scores with a web-grounded generative producer instead (see
+# producers/impromptu.yml → scoresForWork).
+
+- url: openopus-openapi.json
+  name: openopus
+  type: openapi
+  auth: none
+  operation-ids:
+    - omnisearch

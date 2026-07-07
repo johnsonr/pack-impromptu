@@ -1,0 +1,20 @@
+# Focused chat surface for classical-music work.
+#
+# A "focus" is a named scoping of the assistant's chat surface — picks a persona,
+# picks a set of packs whose skills are visible to the chat LLM, and hides
+# everything else. The point is routing reliability: with 30+ skills loaded in a
+# typical workspace, even a sharply-written pack skill can lose to its competitors.
+# Strip the competitors out and the LLM has nothing to confuse the `music` skill with.
+#
+# Activate via `/focus music` in chat. Type `/focus off` to leave.
+#
+# Requires the framework's focus support — older builds parse this file but the chat
+# path doesn't consult it, so installing this on a pre-focus assistant is harmless.
+
+name: music
+displayName: Classical Music
+description: "Look up, rate, and recommend classical works; find recordings and scores"
+icon: "🎻"
+defaultPersona: maestro    # the concert-programme voice the pack ships
+packs: [impromptu]         # only this pack's skills + APIs are visible to the LLM
+builtins: true             # keep the framework's built-in chat tools (memory, repository, etc.)

@@ -1,0 +1,25 @@
+# A summary of your taste in classical music. A THIN reader over the `MusicalTasteSummary` VIRTUAL NODE:
+# the fan-in `workTasteSummary` producer (producers/impromptu.yml) gathers your MusicalWorkRatings and reduces
+# them to one node via the `synthesize` LLM aggregation, cached weekly. So the reduction lives in the graph,
+# not in this lens — the lens just traverses HAS_MUSICAL_TASTE_SUMMARY and presents `ts.summary`.
+id: taste-summary
+name: Your Music Taste
+description: A short read on what you love and avoid, drawn from your ratings.
+spec:
+  kind: cypherscript
+  script: |
+    const rows = await gateway.kg.query({
+      cypher: `MATCH (me:AssistantUser)-[:HAS_MUSICAL_TASTE_SUMMARY]->(ts:MusicalTasteSummary)
+               RETURN ts.summary AS summary, ts.count AS count`,
+      params: JSON.stringify({}),
+    });
+    const list = (rows && rows.rows) ? rows.rows : (rows || []);
+    const r = list[0] || {};
+    const body = r.summary
+      ? `${r.summary}\n\n_Distilled from ${r.count || 0} ratings._`
+      : "Rate a few works and your taste summary will appear here.";
+    await gateway.lens.present({ content: JSON.stringify({
+      kind: "text",
+      title: "Your taste in classical music",
+      markdown: body,
+    }) });

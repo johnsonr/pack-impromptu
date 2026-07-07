@@ -1,0 +1,16 @@
+{
+  "name": "pack-impromptu-ts",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build": "tsc -p tsconfig.build.json && node -e \"require('fs').writeFileSync('dist/package.json', '{\\\"type\\\":\\\"commonjs\\\"}')\" && embabel-build-manifest",
+    "manifest": "embabel-build-manifest"
+  },
+  "devDependencies": {
+    "@embabel/runtime-types": "file:../assistant/tooling/runtime-types",
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
+  }
+}

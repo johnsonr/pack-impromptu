@@ -1,0 +1,18 @@
+# Your rated works, as MusicalWork cards. Focuses the MusicalWork nodes you've RATED (joined to the
+# MusicalWorkRating by workId) and presents kind: entities, so they render through the typed-component host —
+# each card showing its play button (top YouTube recording) and your saved rating (the widget pre-fills it).
+id: rated-works
+name: Rated Works
+description: The works you've rated — highest first.
+spec:
+  kind: cypherscript
+  script: |
+    const rows = await gateway.kg.query({
+      cypher: `MATCH (au:AssistantUser)-[:RATED]->(r:MusicalWorkRating)
+               MATCH (w:MusicalWork) WHERE w.workId = r.workId
+               RETURN w.id AS id ORDER BY r.rating DESC, r.title ASC`,
+      params: JSON.stringify({}),
+    });
+    const list = (rows && rows.rows) ? rows.rows : (rows || []);
+    await gateway.lens.focus({ ids: list.map(x => x.id).filter(Boolean) });
+    await gateway.lens.present({ content: JSON.stringify({ kind: "entities" }) });

@@ -1,0 +1,239 @@
+# Virtual-join producers for the impromptu pack — the classical-music mirror of
+# pack-movie's producers/movie.yml (see specs/VIRTUAL_CYPHER.md in the assistant repo).
+#
+# No model is pinned in any producer (a pack must never hardcode a model); the backend
+# uses the ops-controlled Infrastructure LLMs. These specs carry only source-agnostic config.
+#
+#   similarWorks     generative  SIMILAR_TO   — works like ones you rated (music knowledge), resolved to Open Opus
+#   recordingsByWork remote      HAS_RECORDING — YouTube search for performances of a work
+#   scoresForWork    generative  HAS_SCORE    — web-grounded IMSLP PDF scores of a work
+#   workTasteSummary aggregate   HAS_MUSICAL_TASTE_SUMMARY — fan-IN synthesis of your taste
+#   tasteBasedWorks  generative  SUGGESTS     — works matching your whole taste, resolved to Open Opus
+
+# similarWorks: a GENERATIVE producer — SIMILAR_TO is sourced from the assistant's own music
+# knowledge, NOT an API (Open Opus has no "similar" endpoint). Musical similarity is STATIC world
+# knowledge, so parametric memory is the right source. RESUMABLE: the engine can ask for MORE
+# similar works (excluding ones already suggested or rated) until it has enough unheard picks.
+#
+# resolveVia canonicalizes each LLM-emitted work name onto the Work spine via Open Opus omnisearch:
+# omnisearch(query=name) → the first result with a non-null work → its work.id, projected to workId.
+# A name Open Opus can't resolve is dropped (you can't recommend a work you can't identify), which
+# keeps the anti-join against already-rated workIds correct. `echoKeyAs: searchQuery` stamps the
+# generator's own '<composer> <title>' string onto the resolved Work, so its downstream
+# HAS_RECORDING / HAS_SCORE joins have a good YouTube/IMSLP query.
+- name: similarWorks
+  kind: generative         # GENERATES the edge (resumably) rather than reading it from a store
+  edgeType: SIMILAR_TO
+  identityField: workId
+  anchorKeyField: similarTo
+  nameField: title         # the human name the generator emits (a work name), pre-resolution
+  volatility: static
+  confidenceFloor: 0.3
+  defaultWant: 25          # a view has no LIMIT; keep generating to ~25 survivors (many get filtered out)
+  # The generator is an LLM; the prompt is PACK-AUTHORED (the host generative backend is domain-agnostic).
+  # Rendered with anchors/exclude/want/round/constraints (pushed-down predicates).
+  generator:
+    kind: llm
+    prompt: |
+      You are a classical-music oracle. For each numbered work below, name other works a listener who
+      loves it would very likely also love — genuinely similar in composer, era, form, scale, or mood.
+
+      Works:
+      {% for a in anchors %}{{ a.n }}. {{ a.title }}
+      {% endfor %}
+      {% if exclude %}
+      Do NOT suggest any of these already-known works (the user has heard them, or you already suggested them):
+      {% for e in exclude %}- {{ e }}
+      {% endfor %}
+      {% endif %}
+      {% if constraints %}
+      Additionally, only suggest works that satisfy ALL of these constraints (skip any that don't):
+      {% for c in constraints %}- {{ c }}
+      {% endfor %}
+      {% endif %}
+      Rules:
+      - Suggest up to {{ want }} works in total across all the numbered works.
+      - Set `sourceIndex` to the number of the work each suggestion is similar to.
+      - `title` is the suggested work's name INCLUDING the composer surname, e.g. "Brahms Symphony No. 4"
+        or "Ravel String Quartet in F" — this exact string is used to look the work up, so make it a
+        clean, well-known search string.
+      - `confidence` is 0.0-1.0: how sure you are the work exists AND is genuinely similar. Be honest —
+        lower it for obscure or tenuous picks; do not invent works to reach the count.
+      - Never repeat a work from the exclude list or from your own suggestions.
+  resolveVia:
+    name: resolveWork
+    kind: remote
+    operation: omnisearch            # bare gateway op-id (NOT `openopus.omnisearch`)
+    args:
+      query: "{keys}"
+      offset: "0"
+    keyTemplate: "{key}"
+    echoKeyAs: searchQuery           # stamp the generator's '<composer> <title>' as the Work's search string
+    records: "$.results[*]"          # first result with a non-null work wins (engine picks by non-null identity)
+    project:                         # fill Work's identity + display surface from the resolved catalogue work
+      workId: "work.id"
+      title: "work.title"
+      subtitle: "work.subtitle"
+      composer: "composer.name"
+      composerId: "composer.id"
+      genre: "work.genre"
+  cache:
+    kind: ttl
+    seconds: 2592000        # 30 days — static fact
+
+# recordingsByWork: recordings of a work on YouTube — a plain remote producer over the YouTube Data API
+# search, which is vendored in the RESEARCH pack (gateway.youtube.searchYouTubeVideos), NOT MCP. So this
+# pack REQUIRES pack-research installed; if it isn't, the producer degrades gracefully ("the integration may
+# not be connected"). Powers the HAS_RECORDING join. echoKeyAs stamps the queried searchQuery onto each hit
+# so HAS_RECORDING links back to its work; one search per work (per-key fetch). No duration is returned by
+# search.list — the pack presents title/channel/thumbnail, which is enough to pick and play.
+- name: recordingsByWork
+  kind: remote
+  operation: searchYouTubeVideos    # bare gateway op-id (unique — resolveTool substring-matches op names)
+  args:
+    q: "{keys}"
+    part: "snippet"
+    type: "video"
+    videoEmbeddable: "true"
+    maxResults: 8
+  keyTemplate: "{key}"
+  echoKeyAs: searchQuery             # stamp the queried searchQuery so HAS_RECORDING matches Work.searchQuery
+  records: "$.items[*]"
+  project:
+    videoId: "id.videoId"
+    title: "snippet.title"
+    channel: "snippet.channelTitle"
+    description: "snippet.description"
+    thumbnail: "snippet.thumbnails.medium.url"
+  cache:
+    kind: ttl
+    seconds: 604800                  # 7 days — the top recordings for a canonical work are stable
+
+# scoresForWork: a PROMPTED, WEB-GROUNDED edge that returns the Score type directly. IMSLP's own lookup
+# is a multi-step MediaWiki crawl (search → list files → resolve PDF urls) that doesn't map to a single
+# remote op, so an LLM with web search finds the real IMSLP PDF links instead — `tools: [web]` (looks up
+# REAL scores, not stale parametric memory, which also relaxes the volatility gate: `slow` is allowed
+# BECAUSE it's tool-grounded), and NO resolveVia (the LLM emits the target type's fields directly —
+# url/title/description/pageUrl). MANY scores per work, each keyed by its url; the work's searchQuery is
+# the search key. Cached weekly.
+- name: scoresForWork
+  kind: generative
+  edgeType: HAS_SCORE
+  identityField: url              # each score is a distinct node keyed by its PDF link
+  nameField: url                 # keyed/deduped by url (typed mode)
+  anchorKeyField: workSearchQuery # echoes the anchor Work's searchQuery so each score links back
+  volatility: slow               # allowed because the generator is tool-grounded (web), not parametric
+  defaultWant: 6                 # aim for several editions per work
+  generator:
+    kind: llm
+    tools: [web]                 # attach the workspace's web-search tool(s); host appends the JSON contract
+    prompt: |
+      You are a music librarian's research assistant. For each numbered work below, use web search to find
+      public-domain scores of it on IMSLP (imslp.org, the Petrucci Music Library), and return one record PER
+      distinct score PDF — grounded in real IMSLP pages you actually find, never invented.
+
+      Works:
+      {% for a in anchors %}{{ a.n }}. {{ a.title }}
+      {% endfor %}
+      For EACH score return these fields (skip any score whose PDF url you can't confirm on IMSLP):
+      - url: the direct link to the score PDF on IMSLP.
+      - title: a short label for the edition, e.g. "Complete Score", "Piano Reduction", "Violin Part".
+      - description: what the edition is — forces/instrumentation, editor/urtext, or arrangement, in a phrase.
+      - pageUrl: the IMSLP work page the score is on, e.g. https://imslp.org/wiki/Symphony_No.5_(Beethoven,_Ludwig_van).
+      Set `sourceIndex` to the work's number. Return MULTIPLE objects per work when the page has several editions.
+      Only return IMSLP-hosted, public-domain scores.
+  cache:
+    kind: ttl
+    seconds: 604800               # weekly — public-domain scores accrue slowly
+
+# workTasteSummary: the fan-IN producer behind HAS_MUSICAL_TASTE_SUMMARY. The mirror of similarWorks — where
+# that GENERATES many works off one rating, this GATHERS all the user's MusicalWorkRatings and REDUCES them to
+# ONE MusicalTasteSummary node via the `synthesize` LLM aggregation (the same fan-in function a query can call
+# inline). The traversal, the per-rating text, and the reduction goal are ALL in the pack (no model pinned).
+# Cached weekly. Musical-prefixed edge to avoid cross-pack collision.
+- name: workTasteSummary
+  kind: aggregate
+  edgeType: HAS_MUSICAL_TASTE_SUMMARY
+  identityField: userId           # one summary per user (MERGE on the workspace id folds identity spellings)
+  anchorKeyField: anchorKey       # echoes each received anchor-identity spelling so every AssistantUser links
+  collect:
+    anchorLabel: AssistantUser
+    via: RATED
+    targetLabel: MusicalWorkRating
+    # One text item per rating. ALL ratings count — a 2/10 is taste signal (what they avoid), not noise.
+    text: "{{ composer }} — {{ title }} — rated {{ rating }}/10{% if notes %} · {{ notes }}{% endif %}"
+  reduce:
+    using: synthesize             # the goal-directed LLM fan-in aggregation
+    into: summary
+    args:
+      - >-
+        In about 100 words and the second person ("you"), sum up this person's taste in classical music from
+        their ratings (10 = loved, 1 = hated): the composers, eras, forms (symphony, concerto, chamber, opera,
+        song), scales, and moods they gravitate toward, and what they avoid. Be concrete and specific — name
+        the through-lines. No preamble; just the summary.
+  cache:
+    kind: ttl
+    seconds: 604800                 # 7 days — a weekly-refreshed summary
+
+# tasteBasedWorks: recommendations from your TASTE as a whole, not from any one work. A `generative` producer
+# (exactly like similarWorks) but anchored on the WorkTasteSummary node — its `summary` PROSE is the generator
+# input, so the chain is fan-IN (ratings → one summary node) then fan-OUT (summary → many works). Works matching
+# a described taste are world knowledge → volatility static. Each pick is resolved onto the Work spine via Open
+# Opus so it dedupes against already-rated works, same as similarWorks.
+- name: tasteBasedWorks
+  kind: generative
+  edgeType: SUGGESTS
+  identityField: workId
+  anchorKeyField: fromTaste        # echoes the summary key so every pick links back to the one WorkTasteSummary
+  nameField: title
+  volatility: static
+  confidenceFloor: 0.3
+  defaultWant: 25
+  generator:
+    kind: llm
+    prompt: |
+      You are a concert curator. Below is a prose description of one person's taste in classical music.
+      Recommend works they would very likely LOVE because they match this taste — the same composers, eras,
+      forms, scales, and sensibility described. Prefer non-obvious works over the most famous warhorses.
+
+      Their taste:
+      {% for a in anchors %}{{ a.title }}
+      {% endfor %}
+      {% if exclude %}
+      Do NOT suggest any of these (already known, heard, or already suggested — ignore any that look like a
+      paragraph rather than a work name):
+      {% for e in exclude %}- {{ e }}
+      {% endfor %}
+      {% endif %}
+      {% if constraints %}
+      Only suggest works that satisfy ALL of these constraints (skip any that don't):
+      {% for c in constraints %}- {{ c }}
+      {% endfor %}
+      {% endif %}
+      Rules:
+      - Suggest up to {{ want }} works in total.
+      - Set `sourceIndex` to 1 (there is a single taste description).
+      - `title` is the work's name INCLUDING the composer surname, e.g. "Sibelius Symphony No. 5" — a clean,
+        well-known search string, since it is used to look the work up.
+      - `confidence` is 0.0-1.0: how sure you are the work exists AND genuinely fits this taste. Be honest;
+        don't invent works to reach the count.
+  resolveVia:
+    name: resolveWork
+    kind: remote
+    operation: omnisearch
+    args:
+      query: "{keys}"
+      offset: "0"
+    keyTemplate: "{key}"
+    echoKeyAs: searchQuery
+    records: "$.results[*]"
+    project:
+      workId: "work.id"
+      title: "work.title"
+      subtitle: "work.subtitle"
+      composer: "composer.name"
+      composerId: "composer.id"
+      genre: "work.genre"
+  cache:
+    kind: ttl
+    seconds: 604800                 # weekly — matches the summary's refresh cadence

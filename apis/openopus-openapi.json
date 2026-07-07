@@ -1,0 +1,117 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Open Opus API",
+    "description": "Open Opus — an open, curated catalogue of classical composers and their works. Free, no authentication. Used by the impromptu pack as the canonical source for work facts: it resolves a free-text query (composer + work, e.g. 'Beethoven Symphony 5') into a stable work id, title, composer, and genre, so a `Work` node can canonicalize onto the Open Opus spine and dedupe against works the user has already rated.",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Open Opus",
+      "url": "https://openopus.org/"
+    }
+  },
+  "servers": [
+    { "url": "https://api.openopus.org" }
+  ],
+  "paths": {
+    "/omnisearch/{query}/{offset}.json": {
+      "get": {
+        "operationId": "omnisearch",
+        "summary": "Free-text search across composers, works and genres.",
+        "description": "Searches the whole catalogue with a single free-text `query` (e.g. 'beethoven symphony 5', 'chopin nocturne op 9'). Returns a `results` array ordered by relevance; each element carries a `composer` object and — for work hits — a `work` object. Composer-only hits set `work` to null, so to resolve a specific work take the FIRST result whose `work.id` is non-null. Use a fairly specific query (composer surname + form + number) for a clean top hit.",
+        "parameters": [
+          {
+            "name": "query",
+            "in": "path",
+            "required": true,
+            "description": "URL-encoded free-text search, e.g. 'beethoven%20symphony%205'. Include the composer surname to disambiguate common forms ('symphony no 5' alone is ambiguous across composers).",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "offset",
+            "in": "path",
+            "required": true,
+            "description": "Zero-based paging offset. Pass 0 for the first (most relevant) page of results.",
+            "schema": { "type": "integer", "minimum": 0, "default": 0 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Search results. `status.success` is 'true' on a well-formed response even when `results` is empty.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/OmnisearchResult" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "OmnisearchResult": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "object",
+            "properties": {
+              "success": { "type": "string", "enum": ["true", "false"] },
+              "rows": { "type": "integer", "description": "Number of rows returned." },
+              "version": { "type": "string" }
+            }
+          },
+          "request": {
+            "type": "object",
+            "properties": {
+              "type": { "type": "string" },
+              "search": { "type": "string" },
+              "offset": { "type": "string" }
+            }
+          },
+          "results": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/OmnisearchHit" }
+          }
+        }
+      },
+      "OmnisearchHit": {
+        "type": "object",
+        "description": "One search hit: always a composer, plus a work when the hit is a work.",
+        "properties": {
+          "composer": { "$ref": "#/components/schemas/Composer" },
+          "work": {
+            "description": "The matched work, or null for a composer-only hit.",
+            "oneOf": [
+              { "$ref": "#/components/schemas/CatalogWork" },
+              { "type": "null" }
+            ]
+          }
+        }
+      },
+      "Composer": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "description": "Stable Open Opus composer id." },
+          "name": { "type": "string", "description": "Short name / surname, e.g. 'Beethoven'." },
+          "complete_name": { "type": "string", "description": "Full name, e.g. 'Ludwig van Beethoven'." },
+          "epoch": { "type": "string", "description": "Style period, e.g. 'Romantic', 'Baroque'." },
+          "birth": { "type": "string", "description": "Birth date (YYYY-MM-DD), or empty." },
+          "death": { "type": "string", "description": "Death date (YYYY-MM-DD), or empty." },
+          "portrait": { "type": "string", "format": "uri" }
+        }
+      },
+      "CatalogWork": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "description": "Stable Open Opus work id. Use as Work.workId when persisting." },
+          "title": { "type": "string", "description": "Work title, e.g. 'Symphony no. 5 in C minor, op. 67'." },
+          "subtitle": { "type": "string", "description": "Nickname or subtitle, often empty, e.g. 'Emperor'." },
+          "genre": { "type": "string", "description": "Broad genre, e.g. 'Orchestral', 'Chamber', 'Keyboard', 'Vocal', 'Stage'." },
+          "popular": { "type": "string", "enum": ["0", "1"], "description": "'1' if a well-known / frequently performed work." },
+          "recommended": { "type": "string", "enum": ["0", "1"] },
+          "searchterms": { "type": "string", "description": "Extra search keywords (often empty)." }
+        }
+      }
+    }
+  }
+}

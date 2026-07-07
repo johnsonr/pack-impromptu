@@ -1,0 +1,215 @@
+# Art-music domain types.
+#
+# Deliberately small and modelled 1:1 on pack-movie: `MusicalWork` (canonical metadata
+# for a musical work, keyed by an Open Opus id — the classical analogue of a `Movie`
+# keyed by IMDb id) and `MusicalWorkRating` (the user's score for a work). Two media
+# types hang off a work as VIRTUAL, fetched-on-demand joins: `MusicalRecording`
+# (a performance on YouTube) and `MusicalScore` (a public-domain PDF on IMSLP). And, as
+# in the movie pack, a fan-in `MusicalTasteSummary` node feeds taste-based recommendations.
+#
+# Why the `Musical*` prefix: these nodes live in the shared workspace KG alongside every
+# other installed pack's types. Bare `Work` / `Recording` / `Score` would collide (a task
+# or employment pack's Work; pack-zoom's meeting Recording; a CRM/sports Score), so each
+# type is namespaced — the same reason pack-movie names its fan-in `MovieTasteSummary`.
+#
+# Everything about the USER (which composers/eras they love, the instrument they play,
+# their country) is intentionally NOT redeclared here — that's profile, and the assistant
+# already stores it via the DICE proposition pipeline. Re-modelling it as an entity would
+# just create a second source of truth that drifts.
+#
+# Property shorthand (a plain string is the description) is used where a string column
+# suffices; the object form (with `type`/`identity`/`required`) is used where it matters.
+# See PropertySpec.kt for the schema.
+
+- name: MusicalWork
+  description: |
+    A musical work — a symphony, concerto, sonata, quartet, opera, song cycle — keyed
+    by its Open Opus id. The canonical metadata record the assistant references when
+    discussing a work; created on first Open Opus lookup and re-used for every
+    subsequent rating, recommendation, recording, or score.
+  # Shared reference metadata, NOT user-owned. A work isn't "owned" by a user — the
+  # user's relationship to it is the rating. `false` makes `MusicalWorkRating` the SOLE
+  # bridge: (User)-[:RATED]->(MusicalWorkRating), and MusicalWork stays shared reference
+  # data (without it the framework would wrongly add (MusicalWork)-[:OWNED_BY]->(User)).
+  userAnchor: false
+  properties:
+    workId:
+      identity: true
+      description: "Open Opus work id, e.g. '16406'. The identity key — the store MERGEs on it (deterministic, workspace-scoped id), so the same work is one MusicalWork node however many times it's referenced."
+    title: "Work title as Open Opus gives it, e.g. 'Symphony no. 5 in C minor, op. 67'."
+    subtitle: "Nickname or subtitle, often empty, e.g. 'Emperor', 'Moonlight'."
+    composer: "Composer short name, e.g. 'Beethoven'. Denormalised onto the work so recordings/scores can be searched without a join to a Composer node."
+    composerId: "Open Opus composer id, e.g. '196'."
+    genre: "Broad genre from Open Opus, e.g. 'Orchestral', 'Chamber', 'Keyboard', 'Vocal', 'Stage'."
+    popular:
+      type: boolean
+      description: "True for a well-known, frequently-performed work (Open Opus 'popular' flag)."
+    searchQuery:
+      description: "The free-text string used to search YouTube (recordings) and IMSLP (scores) for THIS work — normally '<composer> <title>', e.g. 'Beethoven Symphony no. 5 in C minor, op. 67'. It is the join key for HAS_RECORDING and HAS_SCORE, so set it whenever you create a MusicalWork (a bare title like 'Symphony no. 5' is ambiguous across composers — always include the composer)."
+  # No `retrieval` auto-bind: Open Opus's omnisearch returns a nested {composer, work}
+  # inside a results[] array, and retrieval auto-bind only maps flat top-level fields.
+  # The `music` skill resolves a work via `gateway.openopus.omnisearch` and creates the
+  # MusicalWork explicitly (setting searchQuery). Methods held on an in-scope work
+  # (`work.recordings({})`, `work.rate({...})`) are authored in TypeScript under
+  # `src/api/` and COMPILED — see src/api/work.ts. This YAML carries only the schema.
+  #
+  # SIMILAR_TO: works like one the user rated, from the assistant's own music knowledge
+  # (producers/impromptu.yml — a generative producer, not an API; Open Opus has no
+  # "similar" endpoint). Anchored on a rated work's TITLE; each suggestion is resolved to
+  # its Open Opus workId so it canonicalizes onto this MusicalWork spine and dedupes
+  # against works already rated. A LAZY query-time join (materialized transiently when a
+  # query traverses it), exactly like pack-movie's SIMILAR_TO. Recommend unheard works with:
+  #   MATCH (u:AssistantUser)-[:RATED]->(rt:MusicalWorkRating) WHERE rt.rating >= 8
+  #   MATCH (rt)-[:SIMILAR_TO]->(rec:MusicalWork)
+  #   WHERE NOT EXISTS { MATCH (u)-[:RATED]->(seen:MusicalWorkRating) WHERE seen.workId = rec.workId }
+  #   RETURN rec.title, count(*) AS overlap ORDER BY overlap DESC LIMIT 10
+  virtualJoins:
+    - anchorLabel: MusicalWorkRating
+      relationship: SIMILAR_TO
+      keyField: title              # MusicalWorkRating.title — the work the user rated
+      recordKeyField: similarTo    # the generative producer echoes the anchor title here
+      producer: similarWorks
+      description: >-
+        Works similar to one the user rated, from the assistant's own music knowledge (not an API).
+        Ratings are 1–10, so anchor on the works the user LOVED, not merely listened to: filter
+        `WHERE rt.rating >= 8`. Each suggestion resolves to its Open Opus workId so it dedupes against
+        already-rated works; exclude everything the user has rated with a NOT EXISTS over their
+        MusicalWorkRating workIds, and rank by how many loved works point at each candidate (`count(*) DESC`).
+    # SUGGESTS: fan-OUT off the TASTE SUMMARY — works matching your taste AS A WHOLE, not similars to any
+    # one rating. Declared HERE under MusicalWork (the TARGET) with anchorLabel MusicalTasteSummary,
+    # mirroring pack-movie. Two-stage chain: HAS_MUSICAL_TASTE_SUMMARY (fan-IN) materializes the summary
+    # node, then SUGGESTS (fan-OUT) generates works off its `summary`:
+    #   MATCH (me:AssistantUser)-[:HAS_MUSICAL_TASTE_SUMMARY]->(ts:MusicalTasteSummary)-[:SUGGESTS]->(w:MusicalWork)
+    #   WHERE NOT EXISTS { (me)-[:RATED]->(seen:MusicalWorkRating) WHERE seen.workId = w.workId }
+    #   RETURN DISTINCT w
+    - anchorLabel: MusicalTasteSummary
+      relationship: SUGGESTS
+      keyField: summary            # the MusicalTasteSummary.summary prose is the generator's input
+      recordKeyField: fromTaste    # tasteBasedWorks echoes the anchor key here
+      producer: tasteBasedWorks
+      description: >-
+        Works that match your OVERALL taste, generated from your taste summary rather than from any one
+        rating. A good "surprise me based on everything I love" list; exclude works you've already rated.
+
+- name: MusicalRecording
+  userAnchor: false
+  description: |
+    A RECORDING of a MusicalWork — a performance on YouTube. VIRTUAL: fetched on demand from the
+    YouTube Data API when a query traverses HAS_RECORDING; never stored. Use it to answer
+    "find me a recording of X" and to attach a listen link to a recommendation:
+      MATCH (w:MusicalWork)-[:HAS_RECORDING]->(r:MusicalRecording) RETURN w.title, r.title, r.channel
+    Build the watch URL from the id: 'https://www.youtube.com/watch?v=' + r.videoId.
+  properties:
+    videoId:
+      identity: true
+      description: "YouTube video id, e.g. 'fOk8Tm815lE'. Identity key. Watch URL = 'https://www.youtube.com/watch?v=' + videoId."
+    title: "The video's title, e.g. 'Beethoven: Symphony No. 5 / Karajan · Berliner Philharmoniker'."
+    channel: "The uploading channel — often the label, orchestra, or performer."
+    description: "The video description (may be long; first paragraph usually names performers)."
+    thumbnail: "URL of the video's thumbnail image."
+  # HAS_RECORDING: the recordings for a MusicalWork (producer recordingsByWork over YouTube search).
+  # Anchored on MusicalWork.searchQuery. A plain MATCH filters to works that HAVE a recording; works with
+  # none simply drop out. Chains after SIMILAR_TO in one query:
+  #   MATCH (rt:MusicalWorkRating) WHERE rt.rating >= 8
+  #   MATCH (rt)-[:SIMILAR_TO]->(w:MusicalWork)-[:HAS_RECORDING]->(r:MusicalRecording)
+  #   RETURN w.title, collect(r.title)[0..2]
+  virtualJoins:
+    - anchorLabel: MusicalWork
+      relationship: HAS_RECORDING
+      keyField: searchQuery       # MusicalWork.searchQuery — '<composer> <title>'
+      recordKeyField: searchQuery # stamped onto each hit by the producer's echoKeyAs
+      producer: recordingsByWork
+      description: >-
+        Recordings (performances) of this work found on YouTube. Only works with at least one hit appear,
+        so a plain MATCH filters recommendations to works you can actually listen to right now.
+
+- name: MusicalScore
+  userAnchor: false
+  description: |
+    A published SCORE of a MusicalWork — a public-domain PDF on IMSLP (the Petrucci Music Library): its url,
+    a short description of what the edition is (full score, piano reduction, a single part), and the IMSLP
+    work page it came from. VIRTUAL: found on demand by an LLM WITH WEB SEARCH (producer `scoresForWork`),
+    never stored — because IMSLP's own lookup is a multi-step MediaWiki crawl, not a single API call. MANY
+    scores per work, each keyed by its PDF url. Reach it from a work:
+      MATCH (w:MusicalWork)-[:HAS_SCORE]->(s:MusicalScore) RETURN s.title, s.url, s.description ORDER BY s.title
+  properties:
+    url:
+      identity: true
+      description: "Direct link to the score PDF on IMSLP — the identity key (each distinct edition is its own node)."
+    title: "A short label for the edition, e.g. 'Complete Score', 'Piano Reduction', 'Violin Part'."
+    description: "What this edition is: forces/instrumentation, editor/urtext, or arrangement, in a phrase."
+    pageUrl: "The IMSLP work page the score was found on, e.g. 'https://imslp.org/wiki/Symphony_No.5_(Beethoven,_Ludwig_van)'."
+    workSearchQuery: "The work's searchQuery this score belongs to — links the score back to its MusicalWork (matches MusicalWork.searchQuery)."
+  # HAS_SCORE: declared under MusicalScore (the type it PRODUCES) with anchorLabel MusicalWork. Anchored on
+  # the work's searchQuery so the LLM has a specific '<composer> <title>' to search IMSLP for; each score
+  # links back by workSearchQuery. MANY scores per work — each keyed by its url. A two-stage chain works:
+  # (rt)-[:SIMILAR_TO]->(w:MusicalWork)-[:HAS_SCORE]->(s).
+  virtualJoins:
+    - anchorLabel: MusicalWork
+      relationship: HAS_SCORE
+      keyField: searchQuery
+      recordKeyField: workSearchQuery
+      producer: scoresForWork
+      description: >-
+        Public-domain PDF scores of the work on IMSLP (one node per edition — url, label, description),
+        gathered by an LLM with web search and cached. Many per work; a plain MATCH filters to works that
+        have a score. Reach it from a recommendation: (w:MusicalWork)-[:HAS_SCORE]->(s:MusicalScore).
+
+- name: MusicalTasteSummary
+  # Shared/virtual, not user-OWNED in the persistence sense: like MusicalWork/MusicalRecording it is
+  # materialized on demand and reached FROM the scoped `(me:AssistantUser)`, so it needs no from-user anchor
+  # of its own. Musical-prefixed label + edge so this pack's fan-in node can't collide with another pack's.
+  userAnchor: false
+  description: |
+    A one-per-user synthesis of the user's taste in classical music, distilled from their MusicalWorkRatings.
+    VIRTUAL — there is no stored MusicalTasteSummary; it is materialized on demand by aggregating (fan-IN) the
+    user's ratings into ~100 words (producer `workTasteSummary`, cached weekly). Reach it from the user and
+    read `ts.summary`:
+      MATCH (me:AssistantUser)-[:HAS_MUSICAL_TASTE_SUMMARY]->(ts:MusicalTasteSummary) RETURN ts.summary
+  properties:
+    userId:
+      identity: true
+      description: "The user this summary is for — the identity key, so there is exactly ONE MusicalTasteSummary per user."
+    summary: "The ~100-word synthesis of the user's taste: composers, eras, forms, and moods they gravitate toward and avoid."
+    count:
+      type: int
+      description: "How many ratings the summary was distilled from."
+    generatedAt: "ISO-8601 timestamp the summary was generated (materialization time)."
+  # HAS_MUSICAL_TASTE_SUMMARY: the fan-IN edge. Anchored on the user; the `workTasteSummary` producer gathers
+  # the user's MusicalWorkRatings and reduces them to one node via the `synthesize` LLM aggregation. keyField
+  # is the user's `id` (== the userId/workspaceId scope key), echoed by the producer into `userId` so the one
+  # node links back.
+  virtualJoins:
+    - anchorLabel: AssistantUser
+      relationship: HAS_MUSICAL_TASTE_SUMMARY
+      keyField: id
+      recordKeyField: anchorKey
+      producer: workTasteSummary
+      description: >-
+        The user's classical-music taste summary, synthesized from every MusicalWorkRating they've recorded.
+        One node per user — ask for `ts.summary`. Materialized on demand and cached weekly. Use it to answer
+        "what's my taste in classical music?" without hand-scanning the ratings.
+
+- name: MusicalWorkRating
+  description: |
+    The current user's rating of a MusicalWork. Use this to record what the user thinks of works they've
+    heard. One rating per (user, work) — when the user re-rates a work, update the existing entry rather than
+    creating a second one. Reads of this collection power "what have I rated?", "what did I think of X?",
+    and the "exclude already-heard" filter when proposing new recommendations.
+  # `(User)-[:RATED]->(MusicalWorkRating)` reads naturally for "what have I rated?" — the framework emits this
+  # edge automatically on every create_entry against this type (see RepositoryStore.applyUserAnchor).
+  userAnchor:
+    predicate: RATED
+    direction: from-user
+  properties:
+    workId:
+      identity: true
+      description: "Open Opus id of the rated work. The identity key: with the user anchor giving workspace scope, this yields one rating per (user, work) — a re-rate updates in place. Use the same value as the corresponding MusicalWork.workId so the two records can be joined."
+    title: "Title of the rated work, denormalised for cheap recall and as the SIMILAR_TO anchor key."
+    composer: "Composer of the rated work, denormalised for cheap recall."
+    rating:
+      type: int
+      required: true
+      description: "Score from 1 (couldn't stand it) to 10 (masterpiece). Whole numbers only."
+    notes: "Optional one-line reaction from the user, in their own words."
+    heardOn: "Optional ISO-8601 date the user last heard the work."
