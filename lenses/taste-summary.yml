@@ -17,7 +17,7 @@ spec:
     const r = list[0] || {};
     const body = r.summary
       ? `${r.summary}\n\n_Distilled from ${r.count || 0} ratings._`
-      : "Rate a few works and your taste summary will appear here.";
+      : "No works rated";
     await gateway.lens.present({ content: JSON.stringify({
       kind: "text",
       title: "Your taste in classical music",

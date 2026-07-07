@@ -1,72 +1,88 @@
-# Named Cypher VIEWS (no JavaScript) — they appear in the Cypher console's Views list and run as
-# `MATCH (v:<Name>) RETURN v`, returning entity-card nodes. The SIMILAR_TO / HAS_RECORDING / HAS_SCORE /
-# HAS_MUSICAL_TASTE_SUMMARY / SUGGESTS edges are virtual: they materialize on demand when the view body
-# runs, inside the scoped, rolled-back read. `(me:AssistantUser)` is NAMED so the scope rewriter binds it
-# to the current user (private MusicalWorkRating never leaks across users).
+# Named Cypher VIEWS for the Cypher console's Views tab. The SIMILAR_TO / HAS_RECORDING / HAS_SCORE /
+# HAS_MUSICAL_TASTE_SUMMARY / SUGGESTS edges are virtual — they materialize on demand when the view runs.
+# `(me:AssistantUser)` is NAMED so the scope rewriter binds it to the current user (private ratings never
+# leak). Keep every virtual join in the LEADING MATCH block (a virtual join after a `WITH` is NOT
+# materialized); put LIMIT/ORDER BY at the END.
 #
-# Gotcha (same as pack-movie): keep a virtual join in the LEADING MATCH chain — a virtual join after a
-# `WITH` is NOT materialized. Put LIMIT/ORDER BY at the END.
+# These are TABULAR views (they RETURN readable scalar columns, not the node), so each is terminal — run it
+# to see the table. The two "listen + score" views below materialize a YouTube recording AND an IMSLP score
+# PER candidate work, so they do one API call + one web search per work: give them a minute, and prefer the
+# cheap browse views (ChamberRecommendations / WorksYoullProbablyDislike) when you just want titles.
 
-# Works similar to ones you rated highly, that you haven't already rated.
+# Top works you'd like, each with ONE recording to hear and ONE public-domain score to read.
+# SIMILAR_TO (works like the ones you loved) → HAS_RECORDING (YouTube, required) → HAS_SCORE (IMSLP, optional).
+# Ranked by overlap: how many of your loved works point at each candidate.
 - name: WorkRecommendations
-  description: Works like the ones you've loved, that you haven't already rated.
-  outputLabel: MusicalWork
+  description: Top 5 works you'd like — with a recording to hear and a public-domain score.
   cypher: |
     MATCH (me:AssistantUser)-[:RATED]->(rt:MusicalWorkRating) WHERE rt.rating >= 8
     MATCH (rt)-[:SIMILAR_TO]->(w:MusicalWork)
     WHERE NOT EXISTS { (me)-[:RATED]->(seen:MusicalWorkRating) WHERE seen.workId = w.workId }
-    RETURN DISTINCT w
+    MATCH (w)-[:HAS_RECORDING]->(r:MusicalRecording)
+    OPTIONAL MATCH (w)-[:HAS_SCORE]->(s:MusicalScore)
+    WITH w, count(DISTINCT rt) AS overlap,
+         head(collect(DISTINCT r)) AS rec,
+         head(collect(DISTINCT s)) AS score
+    RETURN w.composer AS Composer,
+           w.title    AS Work,
+           rec.channel AS Performer,
+           'https://www.youtube.com/watch?v=' + rec.videoId AS Recording,
+           coalesce(score.url, score.pageUrl, '—') AS Score
+    ORDER BY overlap DESC, Work ASC
+    LIMIT 5
 
-# Recommendations you can listen to right now — a two-stage virtual chain: SIMILAR_TO to a work, then
-# HAS_RECORDING to confirm at least one YouTube recording exists (EXISTS keeps it to works you can hear).
-- name: ListenableRecommendations
-  description: Recommended works with at least one recording on YouTube.
-  outputLabel: MusicalWork
+# Recommendations from your taste AS A WHOLE — a two-stage chain (fan-IN MusicalTasteSummary → fan-OUT
+# SUGGESTS), each pick given a recording and a score. Same "listen + score" shape as WorkRecommendations,
+# but sourced from your overall taste rather than similars to any one work.
+- name: TasteBasedRecommendations
+  description: Works matching your overall taste — with a recording and a public-domain score.
   cypher: |
-    MATCH (me:AssistantUser)-[:RATED]->(rt:MusicalWorkRating) WHERE rt.rating >= 8
-    MATCH (rt)-[:SIMILAR_TO]->(w:MusicalWork)
+    MATCH (me:AssistantUser)-[:HAS_MUSICAL_TASTE_SUMMARY]->(ts:MusicalTasteSummary)
+    MATCH (ts)-[:SUGGESTS]->(w:MusicalWork)
     WHERE NOT EXISTS { (me)-[:RATED]->(seen:MusicalWorkRating) WHERE seen.workId = w.workId }
-      AND EXISTS { MATCH (w)-[:HAS_RECORDING]->(:MusicalRecording) }
-    RETURN DISTINCT w
+    MATCH (w)-[:HAS_RECORDING]->(r:MusicalRecording)
+    OPTIONAL MATCH (w)-[:HAS_SCORE]->(s:MusicalScore)
+    WITH w,
+         head(collect(DISTINCT r)) AS rec,
+         head(collect(DISTINCT s)) AS score
+    RETURN w.composer AS Composer,
+           w.title    AS Work,
+           w.genre    AS Genre,
+           rec.channel AS Performer,
+           'https://www.youtube.com/watch?v=' + rec.videoId AS Recording,
+           coalesce(score.url, score.pageUrl, '—') AS Score
+    ORDER BY Composer ASC, Work ASC
+    LIMIT 8
 
-# The anti-recommendation, for fun: works like the ones you rated LOW — what you'd probably also dislike.
-- name: WorksYoullProbablyDislike
-  description: Works like the ones you rated poorly — steer clear.
-  outputLabel: MusicalWork
-  cypher: |
-    MATCH (me:AssistantUser)-[:RATED]->(rt:MusicalWorkRating) WHERE rt.rating <= 4
-    MATCH (rt)-[:SIMILAR_TO]->(w:MusicalWork)
-    WHERE NOT EXISTS { (me)-[:RATED]->(seen:MusicalWorkRating) WHERE seen.workId = w.workId }
-    RETURN DISTINCT w
-
-# Chamber-music picks, drawn from your taste (similars to your loved works, kept if the genre matches).
+# Cheap browse view — chamber-music picks from what you've loved, titles only (no per-work web calls).
 - name: ChamberRecommendations
-  description: Chamber-music picks based on what you've loved.
-  outputLabel: MusicalWork
+  description: Chamber-music picks based on what you've loved (titles only — fast).
   cypher: |
     MATCH (me:AssistantUser)-[:RATED]->(rt:MusicalWorkRating) WHERE rt.rating >= 8
     MATCH (rt)-[:SIMILAR_TO]->(w:MusicalWork)
     WHERE NOT EXISTS { (me)-[:RATED]->(seen:MusicalWorkRating) WHERE seen.workId = w.workId }
       AND w.genre CONTAINS 'Chamber'
-    RETURN DISTINCT w
+    RETURN DISTINCT w.composer AS Composer, w.title AS Work, w.genre AS Genre
+    ORDER BY Composer ASC, Work ASC
+
+# The anti-recommendation, for fun: works like the ones you rated LOW. Titles only — no recording (you
+# won't be listening) and no web calls.
+- name: WorksYoullProbablyDislike
+  description: Works like the ones you rated poorly — steer clear (titles only).
+  cypher: |
+    MATCH (me:AssistantUser)-[:RATED]->(rt:MusicalWorkRating) WHERE rt.rating <= 4
+    MATCH (rt)-[:SIMILAR_TO]->(w:MusicalWork)
+    WHERE NOT EXISTS { (me)-[:RATED]->(seen:MusicalWorkRating) WHERE seen.workId = w.workId }
+    RETURN DISTINCT w.composer AS Composer, w.title AS Work
+    ORDER BY Composer ASC, Work ASC
 
 # Your taste in ~100 words — the fan-IN MusicalTasteSummary node, synthesized from every rating you've
-# recorded and cached weekly. Pure Cypher now that the summary is a node: no JS lens, just traverse the edge.
+# recorded. A TABULAR view so it can fall back to "No works rated" when you have no summary yet: anchor on
+# the (always-present) user, OPTIONAL MATCH the virtual summary, and coalesce the empty case to a message.
 - name: MyMusicTaste
-  description: A ~100-word read on your taste in classical music, distilled from your ratings.
-  outputLabel: MusicalTasteSummary
+  description: Your taste in classical music — or "No works rated" if you have not rated anything.
   cypher: |
-    MATCH (me:AssistantUser)-[:HAS_MUSICAL_TASTE_SUMMARY]->(ts:MusicalTasteSummary)
-    RETURN ts
-
-# Recommendations from your taste AS A WHOLE — a two-stage virtual chain: the MusicalTasteSummary node
-# materializes (fan-IN over your ratings), then SUGGESTS generates works off its prose (fan-OUT). A TABULAR
-# view (RETURNs scalar columns, not the node), so it is TERMINAL — run it to see the table.
-- name: TasteBasedRecommendations
-  description: Works picked to match your overall taste — with composer and genre.
-  cypher: |
-    MATCH (me:AssistantUser)-[:HAS_MUSICAL_TASTE_SUMMARY]->(ts:MusicalTasteSummary)
-    MATCH (ts)-[:SUGGESTS]->(w:MusicalWork)
-    WHERE NOT EXISTS { (me)-[:RATED]->(seen:MusicalWorkRating) WHERE seen.workId = w.workId }
-    RETURN DISTINCT w.composer AS composer, w.title AS title, w.subtitle AS subtitle, w.genre AS genre
-    ORDER BY composer ASC, title ASC
+    MATCH (me:AssistantUser)
+    OPTIONAL MATCH (me)-[:HAS_MUSICAL_TASTE_SUMMARY]->(ts:MusicalTasteSummary)
+    RETURN coalesce(ts.summary, 'No works rated') AS Taste,
+           coalesce(ts.count, 0) AS RatingsUsed
