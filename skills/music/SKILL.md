@@ -107,8 +107,9 @@ point at a paywalled edition or invent a link.
 
 ## "I gave X a 9" — record a rating
 
-Run this as one `execute_javascript` and reply with **exactly the string it
-returns** (you don't have the resolved title/id until it runs):
+A rating belongs to a PERSON. For the current user, resolve their own id and build the
+rater-inclusive identity key. Run as one `execute_javascript` and reply with **exactly the
+string it returns**:
 
 ```js
 const userWork = "Brahms Symphony 4", rating = 9;   // whole number 1–10
@@ -116,17 +117,29 @@ const res = await gateway.openopus.omnisearch({ query: userWork, offset: 0 });
 const hit = (res.results || []).find((r) => r.work && r.work.id);
 if (!hit) return `No work matching "${userWork}" on Open Opus — confirm the composer and title.`;
 const work = hit.work, composer = hit.composer, searchQuery = `${composer.name} ${work.title}`;
+// The rater is the current user (also a Person node). ratingKey = "<myId>::<workId>".
+const meRows = await gateway.kg.query({ cypher: "MATCH (me:AssistantUser) RETURN me.id AS id, me.name AS name LIMIT 1", params: JSON.stringify({}) });
+const me = ((meRows && meRows.rows) ? meRows.rows[0] : (meRows && meRows[0])) || {};
 await gateway.repository.createEntry({ type: "MusicalWork", data: {
   workId: work.id, title: work.title, subtitle: work.subtitle, composer: composer.name,
   composerId: composer.id, genre: work.genre, popular: work.popular === "1", searchQuery } });
 await gateway.repository.createEntry({ type: "MusicalWorkRating",
-  data: { workId: work.id, title: work.title, composer: composer.name, rating },   // add notes/heardOn if given
+  data: { ratingKey: `${me.id}::${work.id}`, raterId: me.id, raterName: me.name,
+          workId: work.id, title: work.title, composer: composer.name, rating },   // add notes/heardOn if given
   relations: [{ predicate: "OF", to: { type: "MusicalWork", workId: work.id } }] });
 return `Saved ${composer.name} — ${work.title} — ${rating}/10.`;
 ```
 
-Ratings are whole numbers 1–10 (round a half and confirm). The
-`(User)-[:RATED]->(MusicalWorkRating)` edge is added automatically — don't add it.
+Ratings are whole numbers 1–10 (round a half and confirm). The `(me)-[:RATED]->(MusicalWorkRating)`
+edge is added automatically for the current user — don't add it.
+
+**Recording a rating for SOMEONE ELSE** ("Ada gave Brahms 4 a 9"): the data model supports it —
+`MusicalWorkRating` carries `raterId`/`raterName` and hangs off any `Person` by
+`(Person)-[:RATED]->(rating)`, so cross-person views work. But `create_entry` only auto-anchors the
+CURRENT user (and its `relations` create outgoing edges only), so it can't yet build the
+`(otherPerson)-[:RATED]->` edge. Until the host adds an anchor-on-person path, attributing a rating
+to another person is a **seeding** operation, not a chat one — tell the user that plainly rather than
+recording it under their own name.
 
 ## "What have I rated?" / "What did I think of X?"
 

@@ -117,15 +117,15 @@ since the engine can't bound a set of virtual works before a per-work web search
 
 ## Multi-person taste
 
-> **Requires the person-attributed rating model** (shipped in [`pack-movie`](../pack-movie), not yet ported
-> here). Today `MusicalWorkRating` anchors on the single user, so these return only your own data. Porting
-> it — `MusicalWorkRating` gains `raterId`/`raterName` and hangs off `(Person)-[:RATED]->` (the user's own
-> `AssistantUser` node is already a `Person`) — makes the queries below work across people, exactly as in
-> pack-movie. The `SIMILAR_TO` intersection already works engine-side (multi-`sourceIndexes`); it just needs
-> more than one rater in the graph.
+A `MusicalWorkRating` is attributed to a **person** — the current user *or* any contact — via
+`(Person)-[:RATED]->(MusicalWorkRating)`, and carries `raterName`/`raterId` (the same model as
+[`pack-movie`](../pack-movie)). Your own `AssistantUser` node is also a `Person`, so one uniform edge covers
+everyone. The saved forms are `RatingsByRater` / `MutualFavourites` / `DividedOpinions`. These populate once
+more than one person has ratings — recording another person's ratings is a **seeding** operation today
+(`create_entry` only auto-anchors the current user).
 
 ```cypher
--- Works you and one named person both love (once the person model is ported)
+-- Works you and one named person both love
 MATCH (me:AssistantUser)-[:RATED]->(rm:MusicalWorkRating)          WHERE rm.rating >= 8
 MATCH (other:Person)-[:RATED]->(ro:MusicalWorkRating)
   WHERE other <> me AND other.name = 'Ada Lovelace'

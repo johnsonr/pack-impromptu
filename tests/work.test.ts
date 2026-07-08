@@ -68,12 +68,13 @@ describe("MusicalWork.details", () => {
 });
 
 describe("MusicalWork.rate", () => {
-  it("writes a MusicalWorkRating from the work's fields plus the rating args", async () => {
+  it("attributes the rating to the current user with a rater-inclusive identity key", async () => {
     const createEntry = vi.fn().mockResolvedValue({ id: "wr1" });
+    const query = vi.fn().mockResolvedValue({ rows: [{ id: "rod_johnson_assistant", name: "Rod Johnson" }] });
     const work = entityForTest(
       MusicalWork,
       { workId: "16406", title: "Symphony no. 5 in C minor, op. 67", composer: "Beethoven" },
-      mockGateway<GenericGatewayContext>({ repository: { createEntry } }),
+      mockGateway<GenericGatewayContext>({ repository: { createEntry }, kg: { query } }),
     );
 
     await work.rate({ rating: 9, notes: "the four notes" });
@@ -81,6 +82,9 @@ describe("MusicalWork.rate", () => {
     expect(createEntry).toHaveBeenCalledWith({
       type: "MusicalWorkRating",
       data: {
+        ratingKey: "rod_johnson_assistant::16406",
+        raterId: "rod_johnson_assistant",
+        raterName: "Rod Johnson",
         workId: "16406",
         title: "Symphony no. 5 in C minor, op. 67",
         composer: "Beethoven",

@@ -86,3 +86,38 @@
     OPTIONAL MATCH (me)-[:HAS_MUSICAL_TASTE_SUMMARY]->(ts:MusicalTasteSummary)
     RETURN coalesce(ts.summary, 'No works rated') AS Taste,
            coalesce(ts.count, 0) AS RatingsUsed
+
+# ── Multi-person taste views ────────────────────────────────────────────────────────────────
+# A MusicalWorkRating carries `raterName`/`raterId` and hangs off its rater by
+# `(Person)-[:RATED]->(MusicalWorkRating)` — the current user's own ratings included (their
+# AssistantUser node is also a Person). So "who rated what" and "what would two people both love"
+# are plain reads over the ratings; the private-type scope rewriter still confines rows to your workspace.
+# (These populate once more than one person has ratings in the graph.)
+
+# Every rating in the workspace, grouped by the person who gave it.
+- name: RatingsByRater
+  description: Every recorded work rating, grouped by the person who gave it, highest first.
+  cypher: |
+    MATCH (r:MusicalWorkRating)
+    RETURN r.raterName AS Rater, r.composer AS Composer, r.title AS Work, r.rating AS Score
+    ORDER BY Rater ASC, Score DESC, Work ASC
+
+# Works TWO OR MORE people both love (rated 8+) — "what would they both enjoy at a concert".
+- name: MutualFavourites
+  description: Works loved (8+) by two or more people — who would enjoy hearing them together.
+  cypher: |
+    MATCH (r:MusicalWorkRating) WHERE r.rating >= 8
+    WITH r.workId AS workId, r.composer AS composer, r.title AS title, collect(DISTINCT r.raterName) AS lovers
+    WHERE size(lovers) >= 2
+    RETURN composer AS Composer, title AS Work, lovers AS LovedBy, size(lovers) AS People
+    ORDER BY People DESC, Composer ASC, Work ASC
+
+# The flip side — works people most disagree on: one loves it (8+), another can't stand it (<=3).
+- name: DividedOpinions
+  description: Works people most disagree on — one loves it, another can't stand it.
+  cypher: |
+    MATCH (hi:MusicalWorkRating) WHERE hi.rating >= 8
+    MATCH (lo:MusicalWorkRating) WHERE lo.rating <= 3 AND lo.workId = hi.workId AND lo.raterId <> hi.raterId
+    RETURN hi.composer AS Composer, hi.title AS Work, hi.raterName AS Loves, hi.rating AS LovesScore,
+           lo.raterName AS Hates, lo.rating AS HatesScore
+    ORDER BY Composer ASC, Work ASC

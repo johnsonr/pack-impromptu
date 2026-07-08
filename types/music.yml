@@ -192,24 +192,33 @@
 
 - name: MusicalWorkRating
   description: |
-    The current user's rating of a MusicalWork. Use this to record what the user thinks of works they've
-    heard. One rating per (user, work) — when the user re-rates a work, update the existing entry rather than
-    creating a second one. Reads of this collection power "what have I rated?", "what did I think of X?",
-    and the "exclude already-heard" filter when proposing new recommendations.
-  # `(User)-[:RATED]->(MusicalWorkRating)` reads naturally for "what have I rated?" — the framework emits this
-  # edge automatically on every create_entry against this type (see RepositoryStore.applyUserAnchor).
+    A rating of a MusicalWork, attributed to a PERSON in the workspace — the current user OR any Person they've
+    recorded a rating for (a friend, a family member). One rating per (rater, work): re-rating updates in place.
+    Reads power "what have I rated?", "what did <person> think of X?", the "exclude already-heard" filter, and
+    cross-person queries like "works <A> and <B> would both like".
+  # Every rating hangs off a Person by `(Person)-[:RATED]->(MusicalWorkRating)`. The current user's own ratings
+  # anchor on their AssistantUser node, which ALSO carries the `Person` label — so the SAME edge and direction
+  # serve "me" and everyone else, and a two-person query is one uniform join:
+  #   MATCH (a:Person)-[:RATED]->(ra:MusicalWorkRating), (b:Person)-[:RATED]->(rb:MusicalWorkRating)
+  #   WHERE ra.workId = rb.workId AND ra.rating >= 8 AND rb.rating >= 8
+  # For the CURRENT user the framework emits `(me)-[:RATED]->` automatically on create_entry (userAnchor below,
+  # from-user). Attributing a rating to ANOTHER person is done by seeding or a future skill that resolves the
+  # person (by email) and links `(person)-[:RATED]->(r)`.
   userAnchor:
     predicate: RATED
     direction: from-user
   properties:
-    workId:
+    ratingKey:
       identity: true
-      description: "Open Opus id of the rated work. The identity key: with the user anchor giving workspace scope, this yields one rating per (user, work) — a re-rate updates in place. Use the same value as the corresponding MusicalWork.workId so the two records can be joined."
+      description: "The identity key — '<raterId>::<workId>', e.g. 'rod_johnson_assistant::16406'. Composite (rater + work) so two people rating the SAME work are two distinct nodes, and a re-rate by the same person updates in place. When recording for the current user, raterId is the user's own id."
+    raterId: "The id of the Person this rating belongs to — the current user's id for their own ratings, or a contact's Person id (e.g. 'person:jane@example.com'). Matches the Person that (Person)-[:RATED]->(this) links from."
+    raterName: "Display name of the rater (e.g. 'Rod Johnson'), denormalised for cheap recall without a join to the Person."
+    workId: "Open Opus id of the rated work (NOT the identity by itself — a work can be rated by several people). Use the same value as MusicalWork.workId so ratings join to works and to each other."
     title: "Title of the rated work, denormalised for cheap recall and as the SIMILAR_TO anchor key."
     composer: "Composer of the rated work, denormalised for cheap recall."
     rating:
       type: int
       required: true
       description: "Score from 1 (couldn't stand it) to 10 (masterpiece). Whole numbers only."
-    notes: "Optional one-line reaction from the user, in their own words."
-    heardOn: "Optional ISO-8601 date the user last heard the work."
+    notes: "Optional one-line reaction, in the rater's own words."
+    heardOn: "Optional ISO-8601 date the work was last heard."

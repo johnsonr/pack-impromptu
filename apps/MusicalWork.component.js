@@ -39,18 +39,33 @@ const styles = `
 // upserts by workId (a re-rate updates in place). Same gateway op the MusicalWork.rate
 // pack method uses.
 function buildRating(host, workId, title, composer, gw) {
-  let current = 0, noteVal = '';
+  let current = 0, noteVal = '', me = null;
   const wrap = document.createElement('div'); wrap.className = 'wr-wrap';
   const stars = document.createElement('div'); stars.className = 'wr-stars';
   const label = document.createElement('span'); label.className = 'wr-label';
   const starEls = [];
   const paint = (n) => { starEls.forEach((s, i) => s.classList.toggle('wr-on', i < n)); label.textContent = n ? n + '/10' : 'Rate'; };
+  // The current user's own Person id + name — the rater for a rating made from this card.
+  const currentUser = async () => {
+    if (me) return me;
+    const res = await gw.kg.query({ cypher: 'MATCH (u:AssistantUser) RETURN u.id AS id, u.name AS name LIMIT 1', params: JSON.stringify({}) });
+    const rows = (res && res.rows) ? res.rows : (res || []);
+    me = rows[0] || {};
+    return me;
+  };
   const submit = async (n) => {
     current = n; paint(n); label.textContent = 'Saving…';
     try {
+      const u = await currentUser();
+      const raterId = u.id || '';
       await gw.repository.createEntry({
         type: 'MusicalWorkRating',
-        data: { workId, title, composer, rating: n, heardOn: new Date().toISOString().slice(0, 10), notes: noteVal || undefined },
+        data: {
+          ratingKey: raterId + '::' + workId,
+          raterId, raterName: u.name,
+          workId, title, composer, rating: n,
+          heardOn: new Date().toISOString().slice(0, 10), notes: noteVal || undefined,
+        },
       });
       label.textContent = 'Rated ' + n + '/10 ✓';
     } catch (e) { label.textContent = 'Failed: ' + (e && e.message); }

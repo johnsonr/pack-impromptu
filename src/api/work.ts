@@ -5,13 +5,19 @@ import { Entity } from "@embabel/runtime-types";
 // so they stay interfaces and live beside the `MusicalWork` type that uses them.
 
 /**
- * The current user's rating of a MusicalWork. Identity is `workId`; the framework
- * anchors it to the user via `RATED` on createEntry, so one row per (user, work) —
- * a re-rate updates in place. Canonical schema lives in `types/music.yml`; this is
- * the slice `MusicalWork.rate` writes.
+ * A rating of a MusicalWork, attributed to a person. Identity is `ratingKey`
+ * (`<raterId>::<workId>`), so one row per (rater, work); the framework also anchors it
+ * to the current user via `RATED` on createEntry. Canonical schema lives in
+ * `types/music.yml`; this is the slice `MusicalWork.rate` writes.
  */
 export interface MusicalWorkRating {
-  /** Open Opus id of the rated work — the identity key (same value as MusicalWork.workId). */
+  /** Identity key — `<raterId>::<workId>`, so two people rating the same work are distinct rows. */
+  ratingKey: string;
+  /** The rater's Person id (the current user's id for their own ratings). */
+  raterId: string;
+  /** The rater's display name, denormalised for cheap recall. */
+  raterName?: string;
+  /** Open Opus id of the rated work (same value as MusicalWork.workId) — a property, not the identity by itself. */
   workId: string;
   /** Title, denormalised for cheap recall without a join. */
   title?: string;
@@ -19,10 +25,16 @@ export interface MusicalWorkRating {
   composer?: string;
   /** Score from 1 (couldn't stand it) to 10 (masterpiece). Whole numbers only. */
   rating: number;
-  /** Optional one-line reaction in the user's own words. */
+  /** Optional one-line reaction in the rater's own words. */
   notes?: string;
-  /** Optional ISO-8601 date the user last heard the work. */
+  /** Optional ISO-8601 date the work was last heard. */
   heardOn?: string;
+}
+
+/** The current user's identity, read from the scoped graph to attribute their own ratings. */
+export interface CurrentUser {
+  id?: string;
+  name?: string;
 }
 
 /** One YouTube search hit — the slice the pack reads from `search.list`. */
@@ -81,6 +93,7 @@ interface ImpromptuGateway {
   };
   openopus: { omnisearch(args: { query: string; offset: number }): Promise<OmnisearchResponse> };
   repository: { createEntry(args: { type: string; data: MusicalWorkRating }): Promise<RatingEntry> };
+  kg: { query(args: { cypher: string; params: string }): Promise<{ rows?: CurrentUser[] } | CurrentUser[]> };
 }
 
 // ─── The type ───────────────────────────────────────────────────────────────
@@ -140,13 +153,19 @@ export class MusicalWork extends Entity {
   }
 
   /**
-   * Record the user's rating of this work (1–10). Recording IS making the link:
-   * createEntry against MusicalWorkRating auto-emits (User)-[:RATED]->(MusicalWorkRating)
-   * and upserts by workId, so a re-rate updates in place. The same gateway op the
-   * card's star widget calls.
+   * Record the CURRENT USER's rating of this work (1–10). Recording IS making the link:
+   * createEntry against MusicalWorkRating auto-emits (me)-[:RATED]->(MusicalWorkRating) —
+   * and `me` is also a Person, so it reads uniformly with other people's ratings. Identity
+   * is `<myId>::<workId>`, so a re-rate updates in place. (Attributing a rating to ANOTHER
+   * person is a separate flow that resolves that person and links their node.)
    */
   async rate(args: { rating: number; notes?: string; heardOn?: string }): Promise<RatingEntry> {
+    const me = await this.currentUser();
+    const raterId = me.id || "";
     const data: MusicalWorkRating = {
+      ratingKey: `${raterId}::${this.workId}`,
+      raterId,
+      raterName: me.name,
       workId: this.workId,
       title: this.title,
       composer: this.composer,
@@ -155,5 +174,15 @@ export class MusicalWork extends Entity {
       heardOn: args.heardOn,
     };
     return this.api.repository.createEntry({ type: "MusicalWorkRating", data });
+  }
+
+  /** The current user's own Person id + name, read from the scoped graph. */
+  private async currentUser(): Promise<CurrentUser> {
+    const res = await this.api.kg.query({
+      cypher: "MATCH (me:AssistantUser) RETURN me.id AS id, me.name AS name LIMIT 1",
+      params: JSON.stringify({}),
+    });
+    const rows = Array.isArray(res) ? res : res.rows || [];
+    return rows[0] || {};
   }
 }
