@@ -52,7 +52,10 @@
       {% endfor %}
       {% endif %}
       {% if hint %}
-      Steer your choices strongly toward this special request from the listener: {{ hint }}
+      The listener has a specific request: {{ hint }}. Treat it as a HARD requirement — EVERY work you
+      suggest MUST clearly satisfy "{{ hint }}". This OVERRIDES similarity: if a work is a great match
+      to the anchors but does not satisfy the request, DROP it and pick one that does. Never include a
+      work that only partly fits just to reach the count — a shorter list of true matches is better.
       {% endif %}
       Rules:
       - Suggest up to {{ want }} works in total across all the numbered works.
@@ -214,7 +217,10 @@
       {% endfor %}
       {% endif %}
       {% if hint %}
-      Steer your choices strongly toward this special request from the listener: {{ hint }}
+      The listener has a specific request: {{ hint }}. Treat it as a HARD requirement — EVERY work you
+      suggest MUST clearly satisfy "{{ hint }}". This OVERRIDES similarity: if a work is a great match
+      to the anchors but does not satisfy the request, DROP it and pick one that does. Never include a
+      work that only partly fits just to reach the count — a shorter list of true matches is better.
       {% endif %}
       Rules:
       - Suggest up to {{ want }} works in total.
