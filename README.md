@@ -115,6 +115,34 @@ You can also click **Run** on the saved views in the console's **Views** tab, an
 the lenses ship `Top 3 — Scores` (one pinned `HAS_SCORE` search per top-rated work,
 since the engine can't bound a set of virtual works before a per-work web search).
 
+## Multi-person taste
+
+> **Requires the person-attributed rating model** (shipped in [`pack-movie`](../pack-movie), not yet ported
+> here). Today `MusicalWorkRating` anchors on the single user, so these return only your own data. Porting
+> it — `MusicalWorkRating` gains `raterId`/`raterName` and hangs off `(Person)-[:RATED]->` (the user's own
+> `AssistantUser` node is already a `Person`) — makes the queries below work across people, exactly as in
+> pack-movie. The `SIMILAR_TO` intersection already works engine-side (multi-`sourceIndexes`); it just needs
+> more than one rater in the graph.
+
+```cypher
+-- Works you and one named person both love (once the person model is ported)
+MATCH (me:AssistantUser)-[:RATED]->(rm:MusicalWorkRating)          WHERE rm.rating >= 8
+MATCH (other:Person)-[:RATED]->(ro:MusicalWorkRating)
+  WHERE other <> me AND other.name = 'Ada Lovelace'
+    AND ro.rating >= 8 AND ro.workId = rm.workId
+RETURN rm.composer AS Composer, rm.title AS Work, rm.rating AS Mine, ro.rating AS Theirs ORDER BY Work
+```
+```cypher
+-- SHARED recommendations — works that appeal to BOTH, new to both. Two SIMILAR_TO fan-outs intersect;
+-- works because a generative pick can name every anchor it resembles (sourceIndexes). ~1–2 min.
+MATCH (me:AssistantUser)-[:RATED]->(rm:MusicalWorkRating) WHERE rm.rating >= 8
+MATCH (rm)-[:SIMILAR_TO]->(w:MusicalWork)
+MATCH (other:Person)-[:RATED]->(ro:MusicalWorkRating) WHERE other.name = 'Ada Lovelace' AND ro.rating >= 8
+MATCH (ro)-[:SIMILAR_TO]->(w)
+WHERE NOT EXISTS { (s:MusicalWorkRating) WHERE s.workId = w.workId }
+RETURN DISTINCT w.composer, w.title LIMIT 20
+```
+
 ## Type methods (`src/api/work.ts`)
 
 `MusicalWork extends Entity`. Its async methods are affordances on an in-scope

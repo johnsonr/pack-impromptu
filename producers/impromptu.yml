@@ -59,7 +59,9 @@
       {% endif %}
       Rules:
       - Suggest up to {{ want }} works in total across all the numbered works.
-      - Set `sourceIndex` to the number of the work each suggestion is similar to.
+      - Set `sourceIndexes` to the numbers of ALL the listed works each suggestion genuinely resembles —
+        usually just one, but list EVERY numbered work it fits. A pick that suits several of the works then
+        surfaces for each of them, so "works two people would both like" works.
       - `title` is the suggested work's name INCLUDING the composer surname, e.g. "Brahms Symphony No. 4"
         or "Ravel String Quartet in F" — this exact string is used to look the work up, so make it a
         clean, well-known search string.
