@@ -1,6 +1,6 @@
 ---
 name: music
-description: Everything about classical / art music — look up a work's facts (composer, title, genre, opus), find a recording to listen to (YouTube), find a public-domain score (IMSLP), recommend something to hear, record a rating, or recall past ratings. Activate this skill for ANY classical-music request, including "tell me about <work>", "who wrote <work>", "find me a recording of <work>", "where can I hear <work>", "is there a score for <work>", "what should I listen to", "I gave <work> a 9", and "what have I rated". For work facts, this pack's Open Opus source is authoritative — use it, not web search.
+description: Classical / art music — work facts (this pack's Open Opus source is authoritative, NOT web search), recordings (YouTube), scores (IMSLP), recommendations, and ratings. Activate for ANY classical-music request; it returns the methods and rules to follow.
 ---
 
 # Classical music
