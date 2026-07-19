@@ -5,10 +5,11 @@ description: Classical / art music — work facts (this pack's Open Opus source 
 
 # Classical music
 
-One skill for everything classical-music-related. The pack ships two APIs
-(`openopus`, `youtube`), the `MusicalWork` and `MusicalWorkRating` workspace
-types (plus virtual `MusicalRecording` / `MusicalScore`), and the `maestro`
-personality (concert-programme voice for write-ups).
+One skill for everything classical-music-related. The pack ships one API
+(`openopus`), the `MusicalWork` and `MusicalWorkRating` workspace types (plus
+virtual `MusicalRecording` / `MusicalScore`), and the `maestro` personality
+(concert-programme voice for write-ups). Recordings call `gateway.youtube.…`,
+which lives in **pack-research** (required for recordings only).
 
 All API calls go through `gateway.<ns>.<method>(args)` from inside
 `execute_javascript` — never as top-level tools.
@@ -105,11 +106,79 @@ point at a paywalled edition or invent a link.
 4. **Write up the top 3** in the `maestro` voice — one sound-led paragraph each, with a recording
    link (search YouTube for each) and, if they play/study, a score link.
 
+## Asking the user to choose — `choices` payloads
+
+Whenever a flow needs the user to pick from a small closed set (a score, one of
+several matching works), do NOT guess, do NOT pick silently, and do NOT bury the
+options in prose. Instead the script RETURNS a `choices` payload as its result,
+and you then present the question and options to the user and STOP — take no
+recording/lookup action until they pick. The structured result lets a client
+that can render forms show one; everywhere else, present the options as a short
+list. The payload shape:
+
+```json
+{"kind": "choices",
+ "question": "<one short question>",
+ "options": ["<option>", "..."],
+ "context": { "<ids the follow-up turn needs>": "..." },
+ "hint": "Present these options to the user and wait for their pick."}
+```
+
+Carry the ids the next turn needs in `context` so you never re-resolve.
+
+### Work named, NO score yet — "Rate Brahms 4 for me", "I heard the Sibelius concerto last night"
+
+Resolve the work via Open Opus first (disambiguates and yields the stable work id),
+then return the choices payload and wait:
+
+```js
+const userWork = "Brahms Symphony 4";
+const res = await gateway.openopus.omnisearch({ query: userWork, offset: 0 });
+const hit = (res.results || []).find((r) => r.work && r.work.id);
+if (!hit) return `No work matching "${userWork}" on Open Opus — confirm the composer and title.`;
+const work = hit.work, composer = hit.composer;
+return JSON.stringify({
+  kind: "choices",
+  question: `How would you rate ${composer.name} — ${work.title}?`,
+  options: ["1","2","3","4","5","6","7","8","9","10"],
+  context: { workId: work.id, title: work.title, subtitle: work.subtitle, composer: composer.name,
+             composerId: composer.id, genre: work.genre, popular: work.popular === "1",
+             searchQuery: `${composer.name} ${work.title}` },
+  hint: "Present these options to the user and wait for their pick, then record the rating.",
+});
+```
+
+When the user answers with a score, record it with the rating script below —
+but build both entries from `context` and SKIP the Open Opus re-lookup.
+
+### Several works match — "the Brahms serenade", "a Bach partita"
+
+When `omnisearch` returns more than one plausible work and the user's words
+don't settle it (opus number, key, nickname, instrument):
+
+```js
+const res = await gateway.openopus.omnisearch({ query: "Brahms Serenade", offset: 0 });
+const hits = (res.results || []).filter((r) => r.work && r.work.id).slice(0, 5);
+if (hits.length > 1) return JSON.stringify({
+  kind: "choices",
+  question: `Which work do you mean?`,
+  options: hits.map((r) => `${r.composer.name} — ${r.work.title}${r.work.subtitle ? " (" + r.work.subtitle + ")" : ""}`),
+  context: { candidates: hits.map((r) => ({ workId: r.work.id, title: r.work.title, subtitle: r.work.subtitle,
+                                            composer: r.composer.name, composerId: r.composer.id,
+                                            genre: r.work.genre, popular: r.work.popular === "1" })) },
+  hint: "Present these options to the user and wait for their pick, then continue with that work's workId.",
+});
+```
+
+Then continue the original request (lookup, recording, score, rating) with the
+chosen candidate from `context` — no re-lookup.
+
 ## "I gave X a 9" — record a rating
 
 A rating belongs to a PERSON. For the current user, resolve their own id and build the
 rater-inclusive identity key. Run as one `execute_javascript` and reply with **exactly the
-string it returns**:
+string it returns**. (If the user named a work but gave NO score, do not run this yet —
+see "Asking the user to choose" above.)
 
 ```js
 const userWork = "Brahms Symphony 4", rating = 9;   // whole number 1–10
