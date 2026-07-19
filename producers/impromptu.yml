@@ -27,6 +27,11 @@
   identityField: workId
   anchorKeyField: similarTo
   nameField: title         # the human name the generator emits (a work name), pre-resolution
+  # Open Opus omnisearch returns 0 for an over-specified title (a quoted nickname / trailing 'Op. NN' tag), so
+  # resolution is FORGIVING: on an exact miss, retry with the `punctuation` strategy's relaxed forms (drop the
+  # quoted aside, then the trailing comma-qualifier) — `Symphony No. 7 in C major, Op. 60 'Leningrad'` →
+  # `Symphony No. 7 in C major`, which resolves. `none` would make resolution strict (exact only).
+  resolveRelaxation: punctuation
   volatility: static
   confidenceFloor: 0.3
   defaultWant: 25          # a view has no LIMIT; keep generating to ~25 survivors (many get filtered out)
@@ -194,6 +199,7 @@
   identityField: workId
   anchorKeyField: fromTaste        # echoes the summary key so every pick links back to the one WorkTasteSummary
   nameField: title
+  resolveRelaxation: punctuation   # forgiving Open Opus resolution — see similarWorks above
   volatility: static
   confidenceFloor: 0.3
   defaultWant: 25
