@@ -1,15 +1,15 @@
 ---
 name: music
-description: Classical / art music — work facts (this pack's Open Opus source is authoritative, NOT web search), recordings (YouTube), scores (IMSLP), recommendations, and ratings. Activate for ANY classical-music request; it returns the methods and rules to follow.
+description: Classical / art music — work facts (this pack's Open Opus source is authoritative, NOT web search), recordings (YouTube links), scores (IMSLP), recommendations, and ratings. Activate for ANY classical-music request; it returns the methods and rules to follow.
 ---
 
 # Classical music
 
 One skill for everything classical-music-related. The pack ships one API
 (`openopus`), the `MusicalWork` and `MusicalWorkRating` workspace types (plus
-virtual `MusicalRecording` / `MusicalScore`), and the `maestro` personality
-(concert-programme voice for write-ups). Recordings call `gateway.youtube.…`,
-which lives in **pack-research** (required for recordings only).
+the virtual `MusicalRecording`), and the `maestro` personality
+(concert-programme voice for write-ups). Recording and score searches ride
+`gateway.brave.…` from **pack-research** (required for those only).
 
 All API calls go through `gateway.<ns>.<method>(args)` from inside
 `execute_javascript` — never as top-level tools.
@@ -17,9 +17,10 @@ All API calls go through `gateway.<ns>.<method>(args)` from inside
 | Surface | Shape |
 |---|---|
 | `gateway.openopus.omnisearch({ query, offset })` | Free-text "composer + work" search, e.g. `{ query: "Beethoven Symphony 5", offset: 0 }`. Returns `{ results: [{ composer, work }] }` — take the FIRST result whose `work` is non-null. |
-| `gateway.youtube.searchYouTubeVideos({ q, part, type, videoEmbeddable, maxResults })` | YouTube video search for recordings (vendored in pack-research — REQUIRES it installed). `q` is `"<composer> <title>"`. Watch URL = `https://www.youtube.com/watch?v=` + `items[].id.videoId`. |
-| `gateway.kg.query({ cypher, params })` | Cypher — for recommendations (`SIMILAR_TO`) and scores (`HAS_SCORE`, web-grounded). |
-| `gateway.repository.listEntries({ type })` | Read workspace entries. **Call the named methods — `gateway.repository.listEntries(...)`, not `gateway.repository(...)`.** |
+| `gateway.brave.webSearch({ q, count })` | Web search (vendored in pack-research — REQUIRES it installed). For recordings: `q` = `"<composer> <title> site:youtube.com/watch"`; each hit's `url` IS the watch link. |
+| `view_run` (top-level MCP tool) | Run a SAVED VIEW by name — the curated read surface. **Prefer a matching view over writing your own query**; discover names/params via `query_guide`. |
+| `gateway.kg.query({ cypher, params })` | Hand-written Cypher — ONLY when no saved view fits (a steered, filtered, or novel shape). |
+| reads → `view_run` / `gateway.kg.query` | There is NO `listEntries`. Read workspace entries through the graph — a saved view (`view_run`) or hand-written Cypher. `gateway.repository` is create / update / delete + `describe` only. |
 | `gateway.repository.createEntry({ type, data, relations })` | Create/merge an entry (MERGEs on the identity key). |
 
 ## Look up a work — "tell me about X", who wrote it, what genre
@@ -49,62 +50,84 @@ await gateway.repository.createEntry({ type: "MusicalWork", data: {
 
 ## "Find me a recording of X" / "where can I hear X"
 
-Search YouTube with the work's `<composer> <title>` string:
+Search the web restricted to YouTube watch pages — each hit's `url` IS the link:
 
 ```js
 const q = "Beethoven Symphony no. 5 in C minor";   // composer + title
-const res = await gateway.youtube.searchYouTubeVideos({ q, part: "snippet", type: "video", videoEmbeddable: "true", maxResults: 8 });
-const items = res.items || [];
-// Each item: id.videoId, snippet.title, snippet.channelTitle, snippet.description, snippet.thumbnails.medium.url.
-// Build the watch URL: "https://www.youtube.com/watch?v=" + item.id.videoId.
+const res = await gateway.brave.webSearch({ q: q + " site:youtube.com/watch", count: 8 });
+const hits = ((res.web && res.web.results) || []).filter((r) => r.url && r.url.includes("youtube.com/watch"));
+// Each hit: url (the watch link), title (usually names performers), description.
 ```
 
-Prefer results whose channel or title names a real orchestra / conductor /
-soloist. **If the call errors, SAY the tool failed — never substitute web search
-and never invent a video id or link.** If the user adds a performer ("the
-Karajan one"), append it to `q`.
+Prefer results whose title names a real orchestra / conductor / soloist. **If
+the call errors, SAY the tool failed — never invent a video link.** If the user
+adds a performer ("the Karajan one"), append it to `q`.
 
 ## "Is there a score for X?" (IMSLP)
 
-Scores are a web-grounded virtual join (`HAS_SCORE`), so pin the work by its
-`searchQuery` and traverse:
+Scores are deliberately NOT a graph join — IMSLP lookup is a slow crawl, wrong
+for query time. Search IMSLP directly (fast, ~1s per work):
 
 ```js
-const q = "Beethoven Symphony no. 5 in C minor";   // the work's searchQuery
-const esc = q.replace(/'/g, "\\'");
-const rows = await gateway.kg.query({
-  cypher: `MATCH (w:MusicalWork {searchQuery:'${esc}'})-[:HAS_SCORE]->(s:MusicalScore)
-           RETURN s.title AS title, s.description AS description, s.url AS url, s.pageUrl AS pageUrl
-           ORDER BY s.title ASC`,
-  params: JSON.stringify({}),
-});
-// A web search runs — give it ~30–60s. Present each as a markdown link to s.url (the PDF) or s.pageUrl.
+const q = "Beethoven Symphony no. 5 in C minor";   // '<composer> <title>'
+const res = await gateway.brave.webSearch({ q: q + " site:imslp.org", count: 5 });
+const pages = ((res.web && res.web.results) || [])
+  .filter((r) => r.url && r.url.includes("imslp.org/wiki/") && !r.url.includes("Category:"));
+// Each hit is an IMSLP WORK PAGE listing every public-domain edition — present the page links.
+// Want actual PDF links? fetch() the page and extract hrefs containing '/wiki/File:' or 'imslp.org/images'.
 ```
 
-Only IMSLP, public-domain scores are returned. If none come back, say so — don't
+Only present IMSLP pages you actually found. If none come back, say so — don't
 point at a paywalled edition or invent a link.
 
 ## "What should I listen to?" — a recommendation
 
-1. **Exclude what they've rated:** `gateway.repository.listEntries({ type: "MusicalWorkRating" })`,
-   read `workId`/`rating`. Empty is fine.
-2. **Honour preferences** from the user's profile (composers, eras, forms they love, the instrument
-   they play) in your context. If vague ("something good"), ask ONE clarifying question first.
-3. Use the graph to generate grounded picks from what they've LOVED:
-   ```js
-   const rows = await gateway.kg.query({
-     cypher: `MATCH (me:AssistantUser)-[:RATED]->(rt:MusicalWorkRating) WHERE rt.rating >= 8
-              MATCH (rt)-[:SIMILAR_TO]->(w:MusicalWork)
-              WHERE NOT EXISTS { (me)-[:RATED]->(seen:MusicalWorkRating) WHERE seen.workId = w.workId }
-              RETURN DISTINCT w.title AS title, w.composer AS composer, w.genre AS genre
-              ORDER BY w.composer LIMIT 12`,
-     params: JSON.stringify({}),
-   });
-   // This is generative (an LLM materializes SIMILAR_TO) — ~20–40s. If the user has no ratings yet,
-   // suggest a few from their profile and OFFER to record ratings so future picks get better.
-   ```
-4. **Write up the top 3** in the `maestro` voice — one sound-led paragraph each, with a recording
-   link (search YouTube for each) and, if they play/study, a score link.
+**Start with the saved views** — one `view_run` call each, no hand-written Cypher:
+
+- `WorkRecommendations` — top 5 from works they've loved, each WITH a recording. The default.
+- `TasteBasedRecommendations` — picks from their taste as a whole, with recordings.
+- `ChamberRecommendations` / `WorksYoullProbablyDislike` — fast titles-only cuts.
+- `MyMusicTaste` — their taste in ~100 words (or "No works rated").
+
+Write your own query ONLY when the request doesn't fit a view — typically a
+mood/form-steered ask, where the constraint goes on the edge as `{ai: {hint}}`.
+Even then, ONE virtual-cypher query covers picks + recordings: generate, exclude
+what they've rated, and join every pick to a recording — all in the leading
+MATCH block. Do NOT split this into a ratings read plus per-work recording
+searches: `HAS_RECORDING` runs those fetches inside the engine, per work, cached.
+Scores are NOT part of this query — fetch them on demand for the works the user
+picks (see the score section above).
+
+```js
+const rows = await gateway.kg.query({
+  cypher: `MATCH (me:AssistantUser)-[:RATED]->(rt:MusicalWorkRating) WHERE rt.rating >= 8
+           MATCH (rt)-[:SIMILAR_TO]->(w:MusicalWork)
+           WHERE NOT EXISTS { (me)-[:RATED]->(seen:MusicalWorkRating) WHERE seen.workId = w.workId }
+           MATCH (w)-[:HAS_RECORDING]->(r:MusicalRecording)
+           WITH w, count(DISTINCT rt) AS overlap,
+                head(collect(DISTINCT r)) AS rec
+           RETURN w.composer AS composer, w.title AS title, w.genre AS genre,
+                  rec.title AS performance,
+                  rec.url AS watch
+           ORDER BY overlap DESC, title ASC LIMIT 5`,
+  params: JSON.stringify({}),
+});
+// Generative SIMILAR_TO + one recording search PER pick, engine-side — give it a
+// minute on a cold cache and tell the user it's working.
+```
+
+- **Steer, don't post-filter**: a mood/form constraint goes on the edge as
+  `-[:SIMILAR_TO {ai: {hint:'…'}}]->`; drop the `w.genre` filter equivalent.
+- **Honour preferences** from the user's profile (composers, eras, forms they love, the
+  instrument they play). If vague ("something good"), ask ONE clarifying question first.
+- **No ratings yet** (empty result and no `MusicalWorkRating` rows): suggest a few from
+  their profile and OFFER to record ratings so future picks get better.
+- **Write up the top 3** in the `maestro` voice — one sound-led paragraph each, with the
+  `watch` link the query returned; add IMSLP score links (score section above) when the
+  user asked to read along.
+- A direct `gateway.brave.webSearch` recording search is ONLY for a need the join
+  can't express (a named performer, a score-following video — append that to `q`) —
+  never for the default recommendation flow.
 
 ## Asking the user to choose — `choices` payloads
 
@@ -212,17 +235,38 @@ recording it under their own name.
 
 ## "What have I rated?" / "What did I think of X?"
 
-`gateway.repository.listEntries({ type: "MusicalWorkRating" })` — optionally
-filter by title/composer substring or `workId`. Report the score and quote any
-`notes` verbatim. If nothing matches, say so plainly — never invent a rating.
-For cross-cuts (highest-rated chamber works, loved-and-hearable), use the Cypher
-tool; the canonical shape is
+Read ratings through VIRTUAL CYPHER, never `listEntries` — the scope rewriter
+binds `(me:AssistantUser)` to the current user, and the `RATED` edge is the
+attribution truth even for rows recorded before `raterName` existed:
+
+```js
+const rows = await gateway.kg.query({
+  cypher: `MATCH (me:AssistantUser)-[:RATED]->(r:MusicalWorkRating)
+           RETURN r.title AS title, r.composer AS composer, r.rating AS rating, r.notes AS notes
+           ORDER BY r.rating DESC, r.title ASC`,
+  params: JSON.stringify({}),
+});
+```
+
+Filter by title/composer in the Cypher (`WHERE r.title CONTAINS '…'`) or in JS.
+Report the score and quote any `notes` verbatim. If nothing matches, say so
+plainly — never invent a rating. For SOMEONE ELSE's ratings, anchor on the
+person instead: `MATCH (p:Person)-[:RATED]->(r:MusicalWorkRating) WHERE p.name
+CONTAINS '<name>'`. Multi-person questions ("who rated what", "what would we
+both enjoy", "where do we disagree") have saved views — `view_run`
+`RatingsByRater`, `MutualFavourites`, or `DividedOpinions`. For other cross-cuts
+(highest-rated chamber works, loved-and-hearable), the canonical shape is
 `(User)-[:RATED]->(r:MusicalWorkRating)-[:OF]->(w:MusicalWork)`.
 
 ## Always
 
+- **Warn the user BEFORE a slow call.** Generation — `SIMILAR_TO`/`SUGGESTS`, the
+  recommendation views — takes up to a minute or two on a cold cache. Say so first
+  ("this takes a minute — generating picks and finding recordings"), then run it.
+  Fast (no warning needed): Open Opus lookups, rating reads/writes, titles-only
+  views, and the direct IMSLP/recording searches (~1s per work).
 - **Never fabricate** an Open Opus id, opus number, recording, score, or rating —
-  each comes from a real `openopus` / `youtube` / web-grounded call.
+  each comes from a real `openopus` / web-grounded search call.
 - For work FACTS, `openopus` is authoritative — prefer it over web search.
 - Use the `maestro` voice only for recommendation / programme-note write-ups; stay
   in the default voice for facts, status, and clarifications.
