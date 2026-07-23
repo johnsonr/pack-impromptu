@@ -8,12 +8,12 @@ description: |
   one `music` Agent Skill — look up a work, find a recording or a score, record a
   rating, recall past ratings, and get recommendations grounded in taste — backed
   by the `MusicalWork` and `MusicalWorkRating` types so ratings persist into the
-  workspace graph and feed future recommendations (`SIMILAR_TO`, a fan-in
+  world graph and feed future recommendations (`SIMILAR_TO`, a fan-in
   `MusicalTasteSummary`, and `SUGGESTS`). The bundled `maestro` personality gives
   write-ups a concert-programme voice.
 
-  REQUIRES the `research` pack to be installed for the `brave` web search that
-  finds recordings (gateway.brave.webSearch — https://github.com/johnsonr/pack-research)
+  REQUIRES the `research` realm to be installed for the `brave` web search that
+  finds recordings (gateway.brave.webSearch — https://github.com/johnsonr/realm-research)
   and set BRAVE_API_KEY. Without it, work lookups, ratings, and recommendations
   still work; only recording and score lookups go quiet.
 version: 0.1.0
