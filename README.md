@@ -1,50 +1,52 @@
-# pack-impromptu
+# realm-impromptu
 
 Classical / art-music companion for the Embabel assistant — grounded in the
 works the user has rated, live Open Opus metadata, recordings on YouTube, and
 public-domain scores on IMSLP.
 
-This pack is the art-music analogue of [`pack-movie`](../pack-movie): where the
-movie pack recommends films grounded in ratings + OMDb + streaming, this pack
+This realm is the art-music analogue of [`realm-movie`](../realm-movie): where the
+movie realm recommends films grounded in ratings + OMDb + streaming, this realm
 recommends musical works grounded in ratings + Open Opus + YouTube + IMSLP. It
 is a distillation of the standalone [`impromptu`](../impromptu) app (a Spring
 Boot classical-music assistant with hand-coded actions, Neo4j persistence, and
-its own UI) down to the things a pack can ship: APIs, types, a workflow skill,
+its own UI) down to the things a realm can ship: APIs, types, a workflow skill,
 and a personality. The chat LLM owns the workflow; the assistant owns the
 persistence and the UI.
 
-> **Requires [`pack-research`](../pack-research)** for the `youtube`
-> recording search (`gateway.youtube.searchYouTubeVideos`). It's a vendored
+> **Requires [`realm-research`](../realm-research)** for the `brave`
+> web search that finds recordings (`gateway.brave.webSearch`). It's a vendored
 > OpenAPI spec there — general enough to be shared, and deliberately not an MCP
-> server. Without pack-research, everything else (work lookup, scores, ratings,
+> server. Without realm-research, everything else (work lookup, scores, ratings,
 > recommendations) still works; only recording lookups go quiet.
 
-## What's in the pack
+## What's in the realm
 
 | Directory | What it contributes |
 |---|---|
-| `apis/` | One OpenAPI 3 spec — **Open Opus** (`gateway.openopus.omnisearch`, free/no-auth work metadata). Recordings use **YouTube** (`gateway.youtube.searchYouTubeVideos`), a vendored OpenAPI spec that lives in **[pack-research](../pack-research)** (a shared, reusable capability — NOT MCP), so this pack **requires pack-research** installed. Calls go through the gateway from `execute_javascript`. |
-| `types/music.yml` | `MusicalWork` (canonical metadata, keyed by Open Opus id) + `MusicalWorkRating` (the user's score), plus three **virtual** types materialized on demand: `MusicalRecording` (YouTube), `MusicalScore` (IMSLP), and the fan-in `MusicalTasteSummary`. Every type is `Musical*`-namespaced so it can't collide with another pack's `Work`/`Recording`/`Score`. |
-| `producers/impromptu.yml` | The five virtual-join producers: `similarWorks` (generative `SIMILAR_TO`), `recordingsByWork` (remote `HAS_RECORDING` over YouTube), `scoresForWork` (web-grounded `HAS_SCORE` over IMSLP), `workTasteSummary` (aggregate `HAS_MUSICAL_TASTE_SUMMARY`), `tasteBasedWorks` (generative `SUGGESTS`). |
-| `skills/music/` | One skill for everything: look up a work, find a recording or score, recommend, rate, recall. Owns the Open Opus + YouTube workflow and the cardinal rules (always search with `<composer> <title>`; never fabricate an id/recording/score). |
+| `apis/` | One OpenAPI 3 spec — **Open Opus** (`gateway.openopus.omnisearch`, free/no-auth work metadata). Recordings are YouTube watch links found via **Brave web search** (`gateway.brave.webSearch` with `site:youtube.com/watch` — the YouTube Data API's `search.list` costs 100 quota units per call, ~100 searches/day free), vendored in **[realm-research](../realm-research)** (a shared, reusable capability — NOT MCP), so this realm **requires realm-research** installed. Calls go through the gateway from `execute_javascript`. |
+| `types/music.yml` | `MusicalWork` (canonical metadata, keyed by Open Opus id) + `MusicalWorkRating` (the user's score), plus two **virtual** types materialized on demand: `MusicalRecording` (YouTube) and the fan-in `MusicalTasteSummary`. (Printed scores are deliberately NOT a virtual type — the `music` skill searches IMSLP directly in code mode; the crawl is too slow for query-time joins.) Every type is `Musical*`-namespaced so it can't collide with another realm's `Work`/`Recording`/`Score`. |
+| `producers/impromptu.yml` | The four virtual-join producers: `similarWorks` (generative `SIMILAR_TO`), `recordingsByWork` (remote `HAS_RECORDING` — YouTube links via Brave search), `workTasteSummary` (aggregate `HAS_MUSICAL_TASTE_SUMMARY`), `tasteBasedWorks` (generative `SUGGESTS`). |
+| `skills/music/` | One skill for everything: look up a work, find a recording or score, recommend, rate, recall. Owns the Open Opus + recording-search workflow and the cardinal rules (always search with `<composer> <title>`; never fabricate an id/recording/score). |
 | `personalities/maestro/` | Concert-programme-note voice — used only by the recommendation / write-up path. Rate confirmations and recall replies stay in the default assistant voice. |
 | `views/` , `lenses/` | Saved Cypher views — tabular "listen + score" recommendations (`WorkRecommendations`, `TasteBasedRecommendations`: composer, work, a YouTube recording, an IMSLP score), cheap browse views (`ChamberRecommendations`, `WorksYoullProbablyDislike`), and `MyMusicTaste` (falls back to "No works rated") — plus JS lenses (`Rated Works`, `Recommendations You Can Hear`, `Your Music Taste`, `Top 3 — Scores`). |
-| `focuses/music.yml` | `/focus music` — scopes chat to this pack + the `maestro` persona. |
+| `focuses/music.yml` | `/focus music` — scopes chat to this realm + the `maestro` persona. |
 | `apps/MusicalWork.component.js` | The `MusicalWork` entity card: play button (top YouTube recording), composer, genre badges, and a 1–10 rating widget. |
 | `src/api/work.ts` | The **`MusicalWork` type** — a TypeScript class `extends Entity`. Fields are the shape; async methods (`work.recordings`, `work.details`, `work.rate`, inherited `work.neighbors`) are affordances callable on an in-scope object. Built to `dist/`. |
 
 ## Setup
 
 - **Open Opus** needs no key.
-- **YouTube** (recordings) is provided by **pack-research** — install it, then set an
-  API key. Create one at [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
-  with the **YouTube Data API v3** enabled, and set it on the assistant process:
+- **Recording search** (Brave) is provided by **realm-research** — install it and set a
+  [Brave Search API](https://brave.com/search/api/) key on the assistant process:
   ```bash
-  export YOUTUBE_API_KEY=...
+  export BRAVE_API_KEY=...
   ```
-  This is a deployment-level key (one Google Cloud project), not per-user OAuth.
-- **IMSLP** needs no key — scores are found by an LLM with web search (`scoresForWork`),
-  because IMSLP's own lookup is a multi-step MediaWiki crawl, not a single API call.
+  This is a deployment-level key, not per-user OAuth. (No Google/YouTube key: the YouTube
+  Data API's `search.list` costs 100 quota units per call — ~100 searches/day free — while
+  a Brave hit's `url` is already the watch link.)
+- **IMSLP** needs no key — the `music` skill finds score pages with a direct Brave web
+  search (`site:imslp.org`); IMSLP's own lookup is a multi-step MediaWiki crawl, so it is
+  deliberately not an API integration nor a graph join.
 
 ## How a work reaches its recordings and scores
 
@@ -53,7 +55,6 @@ string is the join key for both media edges, so the graph can go:
 
 ```
 (MusicalWorkRating)-[:SIMILAR_TO]->(MusicalWork)-[:HAS_RECORDING]->(MusicalRecording)   # YouTube
-                                   (MusicalWork)-[:HAS_SCORE]->(MusicalScore)            # IMSLP (web-grounded)
 ```
 
 The recommendation producers (`similarWorks`, `tasteBasedWorks`) resolve each
@@ -104,19 +105,12 @@ WHERE NOT EXISTS { (me)-[:RATED]->(seen:MusicalWorkRating) WHERE seen.workId = w
 RETURN w.composer, w.title, collect(r.title)[0..2] AS recordings
 ```
 
-**Web-grounded scores (HAS_SCORE → many MusicalScore nodes)**
-```cypher
--- Public-domain scores of one work — pin the work by its searchQuery
-MATCH (w:MusicalWork {searchQuery:'Beethoven Symphony no. 5 in C minor, op. 67'})-[:HAS_SCORE]->(s:MusicalScore)
-RETURN s.title, s.description, s.url ORDER BY s.title
-```
-
 **LLM-judged (the `ai` namespace — steer a generative edge, rank, or filter on subjective taste)**
 
 The `ai` namespace is reserved for per-row LLM judgment over what a virtual join has
 fetched or generated — for a discriminator no stored property or embedding captures.
 An `{ai: {…}}` directive map on a generative edge *steers and tunes* it (`hint`, plus
-`model` — a workspace role like `chat_cheap` — `temperature`, `confidence`, `fresh`);
+`model` — a world role like `chat_cheap` — `temperature`, `confidence`, `fresh`);
 `ai.score(...)` *reranks*; `ai.relevant(...)` *filters*. The `hint` is a soft nudge, so
 never pair it with a `WHERE` on the same edge.
 ```cypher
@@ -146,14 +140,14 @@ RETURN w.composer, w.title, collect(r.title)[0..2] AS recordings
 ```
 
 You can also click **Run** on the saved views in the console's **Views** tab, and
-the lenses ship `Top 3 — Scores` (one pinned `HAS_SCORE` search per top-rated work,
-since the engine can't bound a set of virtual works before a per-work web search).
+the lenses ship `Top 3 — Scores` (a direct IMSLP web search per top-rated work —
+scores are deliberately not a graph join).
 
 ## Multi-person taste
 
 A `MusicalWorkRating` is attributed to a **person** — the current user *or* any contact — via
 `(Person)-[:RATED]->(MusicalWorkRating)`, and carries `raterName`/`raterId` (the same model as
-[`pack-movie`](../pack-movie)). Your own `AssistantUser` node is also a `Person`, so one uniform edge covers
+[`realm-movie`](../realm-movie)). Your own `AssistantUser` node is also a `Person`, so one uniform edge covers
 everyone. The saved forms are `RatingsByRater` / `MutualFavourites` / `DividedOpinions`. These populate once
 more than one person has ratings — recording another person's ratings is a **seeding** operation today
 (`create_entry` only auto-anchors the current user).
@@ -182,7 +176,7 @@ RETURN DISTINCT w.composer, w.title LIMIT 20
 `MusicalWork extends Entity`. Its async methods are affordances on an in-scope
 work object:
 
-- `work.recordings({ maxResults? })` → YouTube search for performances of the work.
+- `work.recordings({ count? })` → YouTube watch links for performances of the work (Brave search).
 - `work.details()` → re-resolve the work's Open Opus metadata.
 - `work.rate({ rating, notes?, heardOn? })` → record a `MusicalWorkRating` (auto-links `RATED`).
 - `work.neighbors({ hops })` → inherited graph walk from this work's node.
@@ -199,9 +193,9 @@ npm run build     # tsc -> dist/ + manifest
 ## Why no separate Composer / Performer entities?
 
 The `impromptu` app models a rich reference graph (Composer, Ensemble, Performer,
-Epoch, Genre, Instrument, …). This pack deliberately keeps only `MusicalWork` and
+Epoch, Genre, Instrument, …). This realm deliberately keeps only `MusicalWork` and
 the user's `MusicalWorkRating`: the composer and genre are denormalised onto the
 work, recordings and scores are virtual (fetched on demand, never stored), and
 anything about the *user's* taste is the DICE proposition graph's job — not a
 second entity that drifts. If a deployment wants the full composer graph, that is
-Open Opus bulk-population, a separate concern from this query-time pack.
+Open Opus bulk-population, a separate concern from this query-time realm.

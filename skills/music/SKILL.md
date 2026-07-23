@@ -1,15 +1,15 @@
 ---
 name: music
-description: Classical / art music — work facts (this pack's Open Opus source is authoritative, NOT web search), recordings (YouTube links), scores (IMSLP), recommendations, and ratings. Activate for ANY classical-music request; it returns the methods and rules to follow.
+description: Classical / art music — work facts (this realm's Open Opus source is authoritative, NOT web search), recordings (YouTube links), scores (IMSLP), recommendations, and ratings. Activate for ANY classical-music request; it returns the methods and rules to follow.
 ---
 
 # Classical music
 
-One skill for everything classical-music-related. The pack ships one API
-(`openopus`), the `MusicalWork` and `MusicalWorkRating` workspace types (plus
+One skill for everything classical-music-related. The realm ships one API
+(`openopus`), the `MusicalWork` and `MusicalWorkRating` world types (plus
 the virtual `MusicalRecording`), and the `maestro` personality
 (concert-programme voice for write-ups). Recording and score searches ride
-`gateway.brave.…` from **pack-research** (required for those only).
+`gateway.brave.…` from **realm-research** (required for those only).
 
 All API calls go through `gateway.<ns>.<method>(args)` from inside
 `execute_javascript` — never as top-level tools.
@@ -17,10 +17,10 @@ All API calls go through `gateway.<ns>.<method>(args)` from inside
 | Surface | Shape |
 |---|---|
 | `gateway.openopus.omnisearch({ query, offset })` | Free-text "composer + work" search, e.g. `{ query: "Beethoven Symphony 5", offset: 0 }`. Returns `{ results: [{ composer, work }] }` — take the FIRST result whose `work` is non-null. |
-| `gateway.brave.webSearch({ q, count })` | Web search (vendored in pack-research — REQUIRES it installed). For recordings: `q` = `"<composer> <title> site:youtube.com/watch"`; each hit's `url` IS the watch link. |
+| `gateway.brave.webSearch({ q, count })` | Web search (vendored in realm-research — REQUIRES it installed). For recordings: `q` = `"<composer> <title> site:youtube.com/watch"`; each hit's `url` IS the watch link. |
 | `view_run` (top-level MCP tool) | Run a SAVED VIEW by name — the curated read surface. **Prefer a matching view over writing your own query**; discover names/params via `query_guide`. |
 | `gateway.kg.query({ cypher, params })` | Hand-written Cypher — ONLY when no saved view fits (a steered, filtered, or novel shape). |
-| reads → `view_run` / `gateway.kg.query` | There is NO `listEntries`. Read workspace entries through the graph — a saved view (`view_run`) or hand-written Cypher. `gateway.repository` is create / update / delete + `describe` only. |
+| reads → `view_run` / `gateway.kg.query` | There is NO `listEntries`. Read world entries through the graph — a saved view (`view_run`) or hand-written Cypher. `gateway.repository` is create / update / delete + `describe` only. |
 | `gateway.repository.createEntry({ type, data, relations })` | Create/merge an entry (MERGEs on the identity key). |
 
 ## Look up a work — "tell me about X", who wrote it, what genre
