@@ -3,7 +3,8 @@ description: |
   Classical / art-music companion, grounded in the works the user has rated and
   live public sources. Virtual `MusicalWork` nodes are resolved from Open Opus
   metadata; each work joins out to virtual `MusicalRecording` nodes (found on
-  YouTube) and virtual `MusicalScore` nodes (public-domain PDFs on IMSLP). Ships
+  YouTube). Printed scores are found by the skill's direct IMSLP web search
+  (deliberately not a graph join — the crawl is too slow for query time). Ships
   one `music` Agent Skill — look up a work, find a recording or a score, record a
   rating, recall past ratings, and get recommendations grounded in taste — backed
   by the `MusicalWork` and `MusicalWorkRating` types so ratings persist into the
@@ -11,13 +12,13 @@ description: |
   `MusicalTasteSummary`, and `SUGGESTS`). The bundled `maestro` personality gives
   write-ups a concert-programme voice.
 
-  REQUIRES the `research` pack to be installed for the `youtube` recording search
-  (gateway.youtube.searchYouTubeVideos — https://github.com/johnsonr/pack-research)
-  and set YOUTUBE_API_KEY. Without it, work lookups, scores, ratings, and
-  recommendations still work; only recording lookups (HAS_RECORDING) go quiet.
+  REQUIRES the `research` pack to be installed for the `brave` web search that
+  finds recordings (gateway.brave.webSearch — https://github.com/johnsonr/pack-research)
+  and set BRAVE_API_KEY. Without it, work lookups, ratings, and recommendations
+  still work; only recording and score lookups go quiet.
 version: 0.1.0
 author: Rod Johnson
-url: https://github.com/johnsonr/pack-impromptu
+url: https://github.com/johnsonr/realm-impromptu
 tags:
   - music
   - classical
@@ -32,5 +33,4 @@ exports:
   - MusicalWork
   - MusicalWorkRating
   - MusicalRecording
-  - MusicalScore
   - MusicalTasteSummary
